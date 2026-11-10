@@ -737,3 +737,28 @@ K.step('the audit log should list my latest {string} with {string} for admin sta
         end
     end, ('No audit line for %s by %s with %s'):format(action, me, detail), 6000)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Discord exports (kora_admin/server/discord.lua). discordDispatch is local to
+-- kora_admin and refuses any other caller before it touches the handler. The
+-- settings export publishes only public identifiers, never the bot token.
+-- ---------------------------------------------------------------------------
+
+K.step('the Discord dispatch export should refuse a call from fft', 'server', function(ctx)
+    K.started('kora_admin')
+    local answered = false
+    local ok = K.export('kora_admin', 'discordDispatch', '{}', function() answered = true end)
+    ctx:equal(ok, false, 'discordDispatch accepted a call from another resource')
+    Wait(200)
+    ctx:equal(answered, false, 'the refused dispatch must not call back')
+end)
+
+K.step('the Discord settings should publish only an enabled flag and public identifiers', 'server', function(ctx)
+    local settings = json.decode(K.export('kora_admin', 'discordSettings'))
+    assert(type(settings) == 'table', 'discordSettings did not return a JSON object')
+    ctx:equal(type(settings.enabled), 'boolean', 'enabled flag')
+    local keys = {}
+    for key in pairs(settings) do keys[#keys + 1] = key end
+    table.sort(keys)
+    ctx:equal(table.concat(keys, ','), 'applicationId,enabled,publicKey', 'published keys')
+end)

@@ -491,3 +491,36 @@ K.step('a script sends me the legacy police event {string}', 'client', function(
     assert(UNSUPPORTED_EVENTS[event], 'Not one of the unsupported legacy events in client/compat.lua: ' .. event)
     TriggerEvent(event)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Ballistic evidence exports (kora_police/server/evidence.lua) and the legacy
+-- handcuff exports (kora_police/client/core.lua). Only refusals and unknown ids:
+-- a created casing writes a durable row and no export removes it.
+-- ---------------------------------------------------------------------------
+
+K.step('looking up the ballistic casing {string} should find nothing', 'server', function(ctx, id)
+    ctx:equal((K.export('kora_police', 'GetBallisticCasing', id)), nil, 'GetBallisticCasing ' .. id)
+end)
+
+K.step('looking up a ballistic casing id of {int} characters should be refused as an invalid case id', 'server', function(ctx, length)
+    local record, err = K.export('kora_police', 'GetBallisticCasing', string.rep('c', length))
+    ctx:equal(record, nil, 'GetBallisticCasing record')
+    ctx:equal(err, 'invalid case id', 'GetBallisticCasing reason')
+end)
+
+K.step('creating a ballistic casing from no round record should find nothing', 'server', function(ctx)
+    ctx:equal((K.export('kora_police', 'CreateBallisticCasing', ctx.tester, nil)), nil, 'CreateBallisticCasing without a round')
+end)
+
+-- The round is complete except for its weapon serial, which must be refused before any write.
+K.step('creating a ballistic casing from a round missing its weapon serial should find nothing', 'server', function(ctx)
+    local round = { id = 'fft_round_no_serial', weapon = 'WEAPON_PISTOL', ammoType = '9mm', lot = 'fft' }
+    ctx:equal((K.export('kora_police', 'CreateBallisticCasing', ctx.tester, round)), nil, 'CreateBallisticCasing without a serial')
+end)
+
+K.step('the handcuff exports should agree', 'client', function(ctx)
+    local legacy = K.export('kora_police', 'isHandcuffed')
+    local upstream = K.export('kora_police', 'IsHandcuffed')
+    ctx:equal(type(legacy), 'boolean', 'isHandcuffed type')
+    ctx:equal(upstream, legacy, 'IsHandcuffed matches isHandcuffed')
+end)
