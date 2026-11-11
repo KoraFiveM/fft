@@ -1007,7 +1007,11 @@ Feature: kora_banking counter, ATM and society accounts
     And the bank snapshot should list 1 bank cards
     Given I stand at 147.77 -1034.87 29.34 facing 158.0
     When I open an ATM session at 147.4 -1035.8 29.3
-    And I enter the ATM PIN "0000"
+    # Wrong PINs from earlier scenarios count against the player (the tester is
+    # never dropped between scenarios); a correct PIN clears that count.
+    And I enter the ATM PIN "4821"
+    Then the ATM session should be unlocked
+    When I enter the ATM PIN "0000"
     Then the bank should refuse with "Incorrect PIN."
     When I enter the ATM PIN "0001"
     And I enter the ATM PIN "0002"
@@ -1036,7 +1040,10 @@ Feature: kora_banking counter, ATM and society accounts
     Then the bank should answer "Bank card issued."
     Given I stand at 147.77 -1034.87 29.34 facing 158.0
     When I open an ATM session at 147.4 -1035.8 29.3
-    And I enter the ATM PIN "0000"
+    # A correct PIN clears wrong attempts left by earlier scenarios.
+    And I enter the ATM PIN "4821"
+    Then the ATM session should be unlocked
+    When I enter the ATM PIN "0000"
     And I enter the ATM PIN "0001"
     And I enter the ATM PIN "0002"
     And I enter the ATM PIN "0003"
