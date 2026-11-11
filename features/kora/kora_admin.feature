@@ -381,3 +381,13 @@ Feature: kora_admin permission gates and self-service commands
   Scenario: An admin's temporary Moderator grant on themselves changes nothing and is revoked
     Given I learn my staff level
     Then granting and revoking myself temporary moderator access should leave my level unchanged for admin staff only
+
+  # Discord exports. dispatch is refused for any caller but kora_admin itself, and
+  # the settings publish exactly three keys, none of them the bot token.
+  @server @rejection
+  Scenario: The Discord dispatch export refuses a call from another resource
+    Then the Discord dispatch export should refuse a call from fft
+
+  @server
+  Scenario: The Discord settings publish only an enabled flag and public identifiers
+    Then the Discord settings should publish only an enabled flag and public identifiers

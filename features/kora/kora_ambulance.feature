@@ -682,3 +682,8 @@ Feature: kora_ambulance hospital care, EMS duty and first-aid guards
     Given I am on duty as "ambulance" at grade 1
     When I run the command "accepthousecall abc"
     Then I should not see a notification containing "That request is no longer available."
+
+  # Legacy EMS helper exports. The tester is not being dragged, so no escort is
+  # reported; the helper answers a boolean and the no-op loop does not raise.
+  Scenario: The EMS helper exports answer without escorting anyone
+    Then the EMS helper exports should answer without escorting anyone

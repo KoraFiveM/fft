@@ -613,3 +613,20 @@ Feature: kora_police duty, station access, citations and impound lot
       | police:client:GetCuffed   |
       | police:client:SendToJail  |
       | police:client:PutInVehicle |
+
+  # Ballistic evidence and legacy handcuff exports. Refusals and unknown ids
+  # only: a created casing is a durable row that no export deletes.
+
+  @server @rejection
+  Scenario: Ballistic casing lookups refuse a malformed id and find nothing for an unknown one
+    Then looking up the ballistic casing "fft_no_such_casing" should find nothing
+    And looking up the ballistic casing "" should find nothing
+    And looking up a ballistic casing id of 65 characters should be refused as an invalid case id
+
+  @server @rejection
+  Scenario: A ballistic casing is not created without a complete round record
+    Then creating a ballistic casing from no round record should find nothing
+    And creating a ballistic casing from a round missing its weapon serial should find nothing
+
+  Scenario: The legacy and upstream handcuff exports always agree
+    Then the handcuff exports should agree

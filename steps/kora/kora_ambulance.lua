@@ -429,3 +429,16 @@ K.step('I accept my house call with the note {string} from the list', 'client', 
     end, 'The house-call list does not show the note ' .. note, 5000)
     ExecuteCommand('accepthousecall ' .. id)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Legacy EMS helper exports (kora_ambulance/client/compat.lua). Read-only:
+-- the tester is never downed, dragged or treated here.
+-- ---------------------------------------------------------------------------
+
+K.step('the EMS helper exports should answer without escorting anyone', 'client', function(ctx)
+    K.started(RESOURCE)
+    ctx:equal(K.export(RESOURCE, 'isEscorted'), false, 'isEscorted')
+    ctx:equal(type(K.export(RESOURCE, 'CanHelp')), 'boolean', 'CanHelp answers a boolean')
+    local ok = pcall(function() return exports[RESOURCE]:PainKillerLoop() end)
+    ctx:equal(ok, true, 'PainKillerLoop is a no-op and does not raise')
+end)
