@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FiveM Functional Testing</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<aside id="indicator" hidden><span></span> Recording gameplay · F7 to stop</aside>
+<aside id="hud" role="status" aria-live="polite" hidden>
+  <div class="hud-head"><i class="spinner"></i><b id="hudTitle"></b><span id="hudCounts"></span></div>
+  <div id="hudScenario"></div>
+  <div id="hudStep"></div>
+  <div id="hudPrev" hidden></div>
+  <div class="hud-bar"><i id="hudBar"></i></div>
+  <small id="hudHint">/fft to view progress or stop</small>
+</aside>
+<main id="panel" hidden>
+  <header class="top">
+    <div class="brand"><span class="logo">FFT</span><div><h1>Functional Testing</h1><small id="adapter">native</small></div></div>
+    <div class="row"><button id="feedback">Provide feedback</button><button id="close">Close</button></div>
+  </header>
+  <div class="bar">
+    <input id="search" type="search" placeholder="Search scenarios, steps or files" aria-label="Search scenarios, steps or files">
+    <input id="tags" placeholder="Tags: @native and not @slow" aria-label="Tag expression">
+    <button id="refresh">Apply / refresh</button>
+    <label for="pace">Pace</label><select id="pace" aria-label="Pause between steps"><option value="0">Fast</option><option value="500">0.5 s</option><option value="1000">1 s</option><option value="2000">2 s</option><option value="5000">5 s</option></select>
+    <button id="runAll" class="primary">Run matching</button><button class="stop danger">Stop</button>
+  </div>
+  <div id="chips" class="chips" hidden></div>
+  <nav aria-label="Sections">
+    <button data-tab="tests" class="active">Tests <b id="countTests" class="count">0</b></button>
+    <button data-tab="writer">Writer &amp; recorder</button>
+    <button data-tab="results">Results</button>
+    <button data-tab="errors">Errors <b id="countErrors" class="count">0</b></button>
+  </nav>
+  <div class="notice-row">
+    <p id="notice" role="status">Choose a scenario or write a feature to get started.</p>
+    <span id="debugBar" hidden><button id="stepNext" class="primary">Next step</button><button id="stepAll">Run to end</button></span>
+  </div>
+
+  <section id="tests" class="tab"><div id="scenarios"></div></section>
+
+  <section id="writer" class="tab" hidden>
+    <div class="toolbar"><button id="newFeature">New feature</button><button id="recordStart">Record gameplay</button><button id="fixture">Capture vending fixture</button><button class="stop">Stop</button></div>
+    <p class="hint">Write → validate → replay → inspect. Debug pauses before each step while keeping scenario context. Recording recognizes vending; review all proposed assertions.</p>
+    <div class="split">
+      <div class="pane">
+        <div class="pane-head"><h2>Feature draft</h2><span id="draftState" class="state">Not validated</span></div>
+        <div class="toolbar"><button id="validate">Validate</button><select id="draftScenario" aria-label="Draft scenario to run"><option value="">All draft scenarios</option></select><button id="replay" class="primary">Replay draft</button><button id="debugDraft">Debug draft</button><button id="copyDraft">Copy feature</button><button id="exportDraft">Export .feature</button></div>
+        <textarea id="draft" spellcheck="false" aria-label="Gherkin feature draft"></textarea>
+        <div id="validation"></div>
+      </div>
+      <div class="pane">
+        <div class="pane-head"><h2>Step catalogue</h2><span id="defCount" class="muted"></span></div>
+        <input id="stepSearch" type="search" placeholder="Find a step to insert" aria-label="Find a step to insert">
+        <p class="hint">Insert a definition, then replace its parameters. Definitions run in their declared realm.</p>
+        <div id="definitions"></div>
+      </div>
+    </div>
+    <details id="timelineBox"><summary>Recording timeline</summary><ol id="timeline"><li class="muted">Nothing recorded yet.</li></ol></details>
+    <details><summary>Vending fixture (copy into config.lua)</summary><pre id="fixtureText">No fixture captured</pre><button id="copyFixture">Copy fixture</button></details>
+  </section>
+
+  <section id="results" class="tab" hidden>
+    <div class="toolbar"><button id="exportReport">Download results JSON</button><button id="copyReport">Copy JSON</button><select id="pastRuns" aria-label="Past runs" title="Your earlier runs saved on the server"><option value="">Past runs…</option></select><select id="resultFilter" aria-label="Result filter"><option value="all">All scenarios</option><option value="failed">Failed only</option></select><button class="stop">Stop</button><span id="savedPath" class="muted"></span></div>
+    <div id="live"></div>
+    <div id="report"><p class="muted">No runs yet.</p></div>
+  </section>
+
+  <section id="errors" class="tab" hidden>
+    <div class="toolbar"><button id="exportErrors">Download error log</button><button id="copyErrors">Copy error log</button><select id="errorFilter" aria-label="Error type"><option value="all">All errors</option><option value="test">Test errors</option><option value="console">Console errors</option></select><span id="errorSummary" class="muted"></span></div>
+    <p class="hint"><b class="badge test">TEST</b> a step, hook or cleanup failed. <b class="badge console">CONSOLE</b> an error was printed to the server console while that step was running. Client (F8) console output cannot be read by scripts and is not captured.</p>
+    <div id="errorList"><p class="muted">No errors recorded.</p></div>
+  </section>
+
+  <footer><span>Lua steps · Gherkin features · Server assertions</span><span id="sessionState">Interactive session</span></footer>
+</main>
+<div id="feedbackBox" class="overlay" hidden>
+  <div class="dialog"><h2>Provide feedback</h2><p class="hint">Saved on the server in the fft resource under reports/feedback.jsonl.</p><textarea id="feedbackText" aria-label="Feedback"></textarea><div class="toolbar"><button id="feedbackSend" class="primary">Send</button><button id="feedbackCancel">Cancel</button></div></div>
+</div>
+<script type="module" src="app.js"></script></body></html>
