@@ -273,8 +273,20 @@ local function targetProbe(label)
         located = (', %d registered aim point(s) within 30 m%s'):format(okLocate and type(points) == 'table' and #points or 0,
             first and (', nearest ' .. at(first)) or '')
     end
-    return (' | probe: targeting %s, hovering %s, ray hit %s, ped %s, camera heading %.0f pitch %.0f%s')
-        :format(p.active and 'on' or 'off', hover, p.hit and at(p.hitCoords) or 'nothing', at(p.ped), p.rot.z, p.rot.x, located)
+    local gates = ''
+    if type(p.gates) == 'table' then
+        local closed = {}
+        for name, value in pairs(p.gates) do
+            -- `focused` and `enabled` are open when true; every other gate is closed when true.
+            local blocking = (name == 'focused' or name == 'enabled') and not value or (name ~= 'focused' and name ~= 'enabled' and value)
+            if blocking then closed[#closed + 1] = name end
+        end
+        table.sort(closed)
+        gates = ', closed gates: ' .. (#closed > 0 and table.concat(closed, ', ') or 'none')
+    end
+    local refusal = K.lastStartRefusal and (', start refused: ' .. K.lastStartRefusal) or ''
+    return (' | probe: targeting %s, hovering %s, ray hit %s, ped %s, camera heading %.0f pitch %.0f%s%s%s')
+        :format(p.active and 'on' or 'off', hover, p.hit and at(p.hitCoords) or 'nothing', at(p.ped), p.rot.z, p.rot.x, located, gates, refusal)
 end
 K.targetProbe = targetProbe
 
@@ -314,7 +326,12 @@ end
 ---`timeout` ms): `start` clears the previous hover, so an immediate `select`
 ---would see nothing even with the option under the crosshair.
 function K.startTargeting(timeout)
-    if not exports.kora_target:fftAction('start') then return false end
+    local started, reason = exports.kora_target:fftAction('start')
+    if not started then
+        K.lastStartRefusal = tostring(reason or 'start refused')
+        return false
+    end
+    K.lastStartRefusal = nil
     local deadline = GetGameTimer() + (timeout or 350)
     while not exports.kora_target:fftAction('hovering') and GetGameTimer() < deadline do Wait(25) end
     return true
