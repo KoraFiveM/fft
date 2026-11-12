@@ -1378,3 +1378,42 @@ K.step('the core should read, write and copy nested paths', 'server', function(c
     ctx:equal(copy.a.list[2], 'y', 'deepClone a.list.2')
     ctx:equal(K.export(CORE, 'deepClone', 'text'), 'text', 'deepClone of text')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Every vehicle model the game knows must be in the shared vehicles registry.
+-- GetAllVehicleModels is a client native ("all registered vehicle model names,
+-- including non-dlc and custom vehicles"), so this runs on the client. The
+-- registry (shared/vehicles.lua, keyed by `model`) is read through allShared.
+-- Read only; nothing is spawned or changed.
+-- ---------------------------------------------------------------------------
+
+K.step('every registered vehicle model should be in the shared vehicles list', 'client', function(ctx)
+    local models = GetAllVehicleModels()
+    assert(type(models) == 'table' and #models > 0, 'GetAllVehicleModels returned no models')
+
+    local list = K.export(CORE, 'allShared', 'vehicles')
+    assert(type(list) == 'table' and #list > 0, 'allShared returned no vehicles')
+    local known = {}
+    for _, record in ipairs(list) do
+        if type(record) == 'table' and type(record.model) == 'string' then
+            known[record.model:lower()] = true
+        end
+    end
+
+    local missing, seen = {}, {}
+    for _, model in ipairs(models) do
+        local name = tostring(model):lower()
+        if not seen[name] then
+            seen[name] = true
+            if not known[name] then missing[#missing + 1] = name end
+        end
+    end
+    if #missing == 0 then return end
+
+    table.sort(missing)
+    local shown = {}
+    for index = 1, math.min(#missing, 40) do shown[index] = missing[index] end
+    error(('%d of %d vehicle models are not in the shared vehicles list: %s%s'):format(
+        #missing, #models, table.concat(shown, ', '),
+        #missing > #shown and (' ... and %d more'):format(#missing - #shown) or ''), 0)
+end)

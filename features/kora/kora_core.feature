@@ -954,3 +954,7 @@ Feature: kora_core modern export API
     And the core should make random alphanumeric text of length 12
     And the core should make random letter text of length 0
     And the core should read, write and copy nested paths
+
+  @client
+  Scenario: Every vehicle model in the game is in the shared vehicles list
+    Then every registered vehicle model should be in the shared vehicles list
