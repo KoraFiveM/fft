@@ -472,3 +472,11 @@ K.step('the client should scale a {string} check with {string} of {float} for th
     local unknown = exports.kora_skills:getSkillCheckOptions('fft_no_such_skill', gameType, { [field] = base })
     assert(type(unknown) == 'table' and same(unknown[field], base), 'Unknown skill changed the options')
 end)
+
+-- Coverage expansion: kora_skills:server:getAll (server/main.lua:215-225).
+K.step('the skills callback should return my skills as a table', 'client', function(ctx)
+    local ok, packed = pcall(function() return exports.kora_lib:callback_triggerPacked('kora_skills:server:getAll') end)
+    assert(ok, 'getAll raised: ' .. tostring(packed))
+    local skills = type(packed) == 'table' and packed[1]
+    assert(type(skills) == 'table', 'getAll refused: ' .. tostring(type(packed) == 'table' and packed[2]))
+end)

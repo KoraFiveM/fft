@@ -561,3 +561,34 @@ Feature: kora_doorlock door state, access and prompt
     Given a doorlock door with the passcode "fft-pin-4711" is available
     And I stand at the chosen door
     Then my game should not know the passcode of the chosen door
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: door management callbacks sent directly, judged by the
+  # tester's door admin permission. Only made-up doors and categories are named.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The door management snapshot is served to door admins only
+    Given my client listens for my door admin permission
+    And the server tells my client whether I am a door admin
+    Then the door management snapshot should be served to door admins only
+
+  @rejection
+  Scenario Outline: The door management callback "<callback>" refuses a made-up target
+    Given my client listens for my door admin permission
+    And the server tells my client whether I am a door admin
+    Then the door management callback "<callback>" should refuse a made-up target
+
+    Examples:
+      | callback                        |
+      | managementStateSet              |
+      | managementDoorDeleted           |
+      | managementDoorsLinked           |
+      | managementCategoryRenamed       |
+      | managementCategoryDefaultsSaved |
+      | managementCategoryDeleted       |
+      | managementCategoryDoorCreated   |
+      | managementDoorSaved             |
+      | managementDoorCreated           |
+
+  Scenario: An entity that is not a door has no door id
+    Then kora_doorlock should know no door for my ped or entity 0

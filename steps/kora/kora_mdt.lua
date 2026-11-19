@@ -123,3 +123,77 @@ K.step('the last MDT action should have changed no page', 'client', function(ctx
     assert(result.navigate == nil, 'The last MDT action navigated to ' .. tostring(type(result.navigate) == 'table' and result.navigate.viewId))
     assert(result.app == nil, 'The last MDT action refreshed the terminal')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: the server refusing a callback sent directly, outside
+-- the terminal (server/main.lua). Each call is refused by role() / can() /
+-- isPoliceBoss() or by input validation before any SQL write or audit row.
+-- Only made-up ids are used ("FFT00000ZZ9", 999999999, 0).
+-- ---------------------------------------------------------------------------
+
+local NOT_AUTHORISED = 'not authorised' -- locales/en.lua Error.not_authorised
+
+local function mdtCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked('kora_mdt:server:' .. name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('kora_mdt:server:%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('kora_mdt:server:%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+-- Arguments per callback, shaped as the terminal sends them but naming nobody.
+local MDT_ARGS = {
+    dashboard = function() end,
+    reports = function() end,
+    reportOptions = function() end,
+    cases = function() end,
+    warrants = function() end,
+    bolos = function() end,
+    charges = function() end,
+    manageCharges = function() end,
+    searchPeople = function() return 'fftzz' end,
+    searchVehicles = function() return 'fftzz' end,
+    person = function() return 'FFT00000ZZ9' end,
+    vehicle = function() return 'FFT NONE' end,
+    report = function() return 999999999 end,
+    case = function() return 999999999 end,
+    closeReport = function() return 999999999 end,
+    closeWarrant = function() return 999999999, 'served' end,
+    resolveBolo = function() return 999999999 end,
+    updateCaseStatus = function() return 999999999, 'closed' end,
+    linkCaseReport = function() return 999999999, 999999999 end,
+    addCriminal = function() return 'FFT00000ZZ9', 'FFT', 'fft' end,
+    addMedical = function() return 'FFT00000ZZ9', 'fft' end,
+    createWarrant = function() return { citizenid = 'FFT00000ZZ9', reason = 'fft' } end,
+    createReport = function() return { title = 'fft' } end,
+    createCase = function() return { title = 'fft' } end,
+    createBolo = function() return { subject_type = 'person', title = 'fft' } end,
+    createCharge = function() return { code = 'FFT', label = 'fft', fine = 1 } end,
+    updateCharge = function() return 'FFT', 'fft', 1 end,
+}
+
+K.step('the MDT callback {string} sent directly should be refused as not authorised', 'client', function(ctx, name)
+    local build = assert(MDT_ARGS[name], 'Not an MDT callback in this suite: ' .. name)
+    local result, err = mdtCall(name, build())
+    assert(not result, ('kora_mdt:server:%s answered a player it should refuse'):format(name))
+    ctx:equal(err, NOT_AUTHORISED, 'kora_mdt:server:' .. name .. ' refusal')
+end)
+K.step('the MDT should not let me manage charges', 'client', function(ctx)
+    ctx:equal(mdtCall('canManageCharges'), false, 'kora_mdt:server:canManageCharges')
+end)
+K.step('the MDT callback {string} with {string} should be refused as {string}', 'client', function(ctx, name, raw, expected)
+    -- raw is a comma-separated argument list; whole numbers are sent as numbers.
+    local args = {}
+    for part in (raw .. ','):gmatch('([^,]*),') do
+        part = part:match('^%s*(.-)%s*$')
+        args[#args + 1] = part:match('^%-?%d+$') and tonumber(part) or part
+    end
+    local result, err = mdtCall(name, table.unpack(args))
+    assert(not result, ('kora_mdt:server:%s accepted %s'):format(name, raw))
+    ctx:equal(err, expected, 'kora_mdt:server:' .. name .. ' refusal')
+end)

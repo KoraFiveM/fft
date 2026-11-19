@@ -708,3 +708,31 @@ Feature: kora_emotemenu emotes, walk styles and expressions
       | bad name!          | Choose a valid saved emote.        |
       | fft_no_such_saved  | That saved emote no longer exists. |
       | wave               | That saved emote no longer exists. |
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: shared-emote and emote-creator events sent directly.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario: A shared emote with myself is refused
+    When I ask the emote server to share "hug" with myself
+    Then I should see a notification containing "Choose another nearby player."
+
+  @rejection
+  Scenario: An unknown shared emote is refused
+    # Config.syncCooldown = 3000 per player; the previous scenario used it.
+    Given I wait 3500 milliseconds
+    When I ask the emote server to share "fft_never_an_emote" with player 65000
+    Then I should see a notification containing "That shared emote is unavailable."
+
+  @rejection
+  Scenario: Deleting a saved emote that does not exist is refused
+    When I ask the emote server to delete the saved emote "fft_never_saved"
+    Then I should see an emote notification containing "That saved emote could not be found" or "You do not have permission to delete emotes."
+
+  @rejection
+  Scenario: Cancelling or answering a shared emote I was never offered changes nothing
+    Then cancelling or answering a shared emote I was never offered should change nothing
+
+  Scenario: The created emotes are sent to me on request
+    Then the emote server should send me the created emotes when asked

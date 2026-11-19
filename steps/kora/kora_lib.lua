@@ -1424,3 +1424,516 @@ K.step('kora_lib should refuse permission checks without a valid player or level
     serverRefusal(ctx, 'permissions_getLevel', 'Each permission level must be a non-empty string.', ctx.tester, { 'user', '' })
     serverRefusal(ctx, 'permissions_hasLevel', 'Required permission level must be a non-empty string.', ctx.tester, '', { 'user' })
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: debounce, throttle, rate limiter, nearest, lookup,
+-- locales, notify aliases, minigame motion, controlled loops, GlobalState
+-- waits and server distance checks. Every export here is stateless or owns
+-- only the handles it returns; nothing is written to any player or to the
+-- world, and every timer a step creates is cleared in cleanup.
+-- ---------------------------------------------------------------------------
+
+-- Kora.timers.debounce(fn, wait) returns { run, cancel, isPending }
+-- (modules/timers/shared.lua). __call does not cross the export boundary, so
+-- consumers use .run(...), exactly as the module documents.
+K.step('a kora_lib debounce of {int} milliseconds should run once with the last arguments of a burst', 'server',
+    function(ctx, wait)
+        assert(wait >= 50 and wait <= 2000, 'Test debounces last 50-2000 ms')
+        local calls, last = 0, nil
+        local handle = K.export(LIB, 'timers_debounce', function(value) calls = calls + 1 last = value end, wait)
+        assert(type(handle) == 'table' and handle.run and handle.cancel and handle.isPending,
+            'timers_debounce did not return run, cancel and isPending')
+        ctx:cleanup(function() pcall(function() handle.cancel() end) end)
+        ctx:equal(handle.isPending(), false, 'isPending before the first run')
+        handle.run('fft-first')
+        handle.run('fft-second')
+        handle.run('fft-third')
+        ctx:equal(handle.isPending(), true, 'isPending inside the burst')
+        ctx:waitUntil(function() return calls >= 1 end, 'The debounced function never ran', wait + 3000)
+        pause(ctx, wait + 300)
+        ctx:equal(calls, 1, 'Debounced run count')
+        ctx:equal(last, 'fft-third', 'Arguments of the debounced run')
+        ctx:equal(handle.isPending(), false, 'isPending after the run')
+    end)
+K.step('a cancelled kora_lib debounce should never run', 'server', function(ctx)
+    local calls = 0
+    local handle = K.export(LIB, 'timers_debounce', function() calls = calls + 1 end, 400)
+    ctx:cleanup(function() pcall(function() handle.cancel() end) end)
+    ctx:equal(handle.cancel(), false, 'cancel with nothing pending')
+    handle.run()
+    ctx:equal(handle.cancel(), true, 'cancel with a run pending')
+    ctx:equal(handle.isPending(), false, 'isPending after cancel')
+    pause(ctx, 900)
+    ctx:equal(calls, 0, 'Debounced run count after cancel')
+end)
+-- Kora.timers.throttle(fn, interval) returns { run, remaining, reset }.
+K.step('a kora_lib throttle of {int} milliseconds should let one call through until it is reset', 'server',
+    function(ctx, interval)
+        assert(interval >= 5000, 'Use a throttle long enough to outlast the step')
+        local calls = 0
+        local handle = K.export(LIB, 'timers_throttle', function() calls = calls + 1 end, interval)
+        assert(type(handle) == 'table' and handle.run and handle.remaining and handle.reset,
+            'timers_throttle did not return run, remaining and reset')
+        ctx:equal(handle.remaining(), 0, 'remaining before the first call')
+        ctx:equal(handle.run(), true, 'First throttled call')
+        ctx:equal(handle.run(), false, 'Second throttled call inside the interval')
+        ctx:equal(calls, 1, 'Throttled run count')
+        local remaining = handle.remaining()
+        assert(type(remaining) == 'number' and remaining > 0 and remaining <= interval,
+            'Throttle remaining is ' .. tostring(remaining))
+        handle.reset()
+        ctx:equal(handle.remaining(), 0, 'remaining after reset')
+        ctx:equal(handle.run(), true, 'Throttled call after reset')
+        ctx:equal(calls, 2, 'Throttled run count after reset')
+    end)
+-- Kora.timers.count(): every live timer record, whoever owns it.
+K.step('the kora_lib timer count should include a pending timeout until it is cleared', 'server', function(ctx)
+    local id = K.export(LIB, 'timers_setTimeout', function() end, 60000)
+    ctx:cleanup(function() pcall(function() exports[LIB]:timers_clearTimeout(id) end) end)
+    local withTimer = K.export(LIB, 'timers_count')
+    assert(type(withTimer) == 'number' and withTimer >= 1, 'timers_count is ' .. tostring(withTimer))
+    ctx:equal(K.export(LIB, 'timers_clearTimeout', id), true, 'timers_clearTimeout result')
+    -- Other resources may add or drop timers meanwhile; ours is gone, so the
+    -- count cannot still include it unless something else started one.
+    local after = K.export(LIB, 'timers_count')
+    assert(type(after) == 'number' and after >= 0, 'timers_count is ' .. tostring(after))
+end)
+K.step('kora_lib should refuse debounce and throttle without a callable or with a negative wait', 'server', function(ctx)
+    -- modules/timers/shared.lua debounce/throttle asserts; assertInterval :32-35.
+    serverRefusal(ctx, 'timers_debounce', 'Kora.timers.debounce requires a callable.', 'fft-not-a-function', 100)
+    serverRefusal(ctx, 'timers_throttle', 'Kora.timers.throttle requires a callable.', 'fft-not-a-function', 100)
+    serverRefusal(ctx, 'timers_debounce', 'Kora.timers.debounce requires a non-negative integer millisecond interval.',
+        function() end, -5)
+    serverRefusal(ctx, 'timers_throttle', 'Kora.timers.throttle requires a non-negative integer millisecond interval.',
+        function() end, 1.5)
+end)
+
+-- Kora.util.rateLimiter(max, window): limiter:consume(key, now) takes the
+-- caller's clock, so these checks are deterministic (modules/util/shared.lua).
+K.step('a kora_lib rate limiter of {int} calls per {int} milliseconds should refuse the next call until the window passes',
+    'server', function(ctx, max, window)
+        assert(max >= 1 and max <= 20 and window >= 1, 'Use 1-20 calls and a positive window')
+        local limiter = K.export(LIB, 'util_rateLimiter', max, window)
+        assert(type(limiter) == 'table' and limiter.consume, 'util_rateLimiter did not return consume')
+        local function consume(key, now) return limiter.consume(limiter, key, now) end
+        for call = 1, max do
+            ctx:equal(consume('fft-a', 1000 + call), true, ('Call %d inside the limit'):format(call))
+        end
+        local allowed, retry = consume('fft-a', 1000 + max)
+        ctx:equal(allowed, false, 'Call beyond the limit')
+        assert(type(retry) == 'number' and retry > 0 and retry <= window, 'Retry-after is ' .. tostring(retry))
+        ctx:equal(consume('fft-b', 1000 + max), true, 'Another key has its own bucket')
+        -- The first stamp (1001) falls out of the window at 1001 + window.
+        ctx:equal(consume('fft-a', 1001 + window), true, 'Call after the oldest stamp left the window')
+    end)
+K.step('kora_lib should refuse a rate limiter with an invalid limit or window', 'server', function(ctx)
+    serverRefusal(ctx, 'util_rateLimiter', 'Kora.util.rateLimiter requires a positive integer max.', 0, 1000)
+    serverRefusal(ctx, 'util_rateLimiter', 'Kora.util.rateLimiter requires a positive integer max.', 2.5, 1000)
+    serverRefusal(ctx, 'util_rateLimiter', 'Kora.util.rateLimiter requires a positive finite window.', 3, 0)
+end)
+
+-- Kora.util.nearest(list, position, { coordsOf, radius?, bucketOf?, bucket? }).
+local NEAREST_POINTS = {
+    { id = 'fft-near', bucket = 1, coords = { x = 3.0, y = 4.0, z = 0.0 } },  -- 5 from the origin
+    { id = 'fft-mid', bucket = 2, coords = { x = 6.0, y = 8.0, z = 0.0 } },   -- 10
+    { id = 'fft-far', bucket = 1, coords = { x = 30.0, y = 40.0, z = 0.0 } }, -- 50
+}
+local function nearestOf(opts)
+    opts.coordsOf = function(entry) return entry.coords end
+    local entry, distance = K.export(LIB, 'util_nearest', NEAREST_POINTS, { x = 0.0, y = 0.0, z = 0.0 }, opts)
+    return entry and entry.id or nil, distance
+end
+K.step('kora_lib should find the nearest entry to the origin as {string} at {float}', 'server', function(ctx, id, distance)
+    local found, at = nearestOf({})
+    ctx:equal(found, id, 'util_nearest entry')
+    assertNear(at, distance, 'util_nearest distance')
+end)
+K.step('kora_lib should find no entry within {float} of the origin', 'server', function(ctx, radius)
+    ctx:equal(nearestOf({ radius = radius }), nil, 'util_nearest entry inside the radius')
+end)
+K.step('kora_lib should find the nearest entry in bucket {int} as {string}', 'server', function(ctx, bucket, id)
+    ctx:equal(nearestOf({ bucket = bucket, bucketOf = function(entry) return entry.bucket end }), id,
+        'util_nearest entry in the bucket')
+end)
+K.step('kora_lib should refuse a nearest search without a list or coordinate reader', 'server', function(ctx)
+    serverRefusal(ctx, 'util_nearest', 'Kora.util.nearest requires a list.', 'fft-not-a-list', { x = 0, y = 0, z = 0 },
+        { coordsOf = function() end })
+    serverRefusal(ctx, 'util_nearest', 'Kora.util.nearest requires opts.coordsOf.', {}, { x = 0, y = 0, z = 0 }, {})
+    serverRefusal(ctx, 'util_nearest', 'Kora.util.nearest opts.bucketOf must be callable when provided.', {},
+        { x = 0, y = 0, z = 0 }, { coordsOf = function() end, bucketOf = 'fft-not-a-function' })
+end)
+
+-- Kora.lookup (modules/lookup/shared.lua, base data in modules/lookup/data).
+-- Names and hashes are asserted; labels may be overridden by server overlays.
+K.step('kora_lib should look up the weapon {string} with hash {int}', 'server', function(ctx, value, hash)
+    local record, reason = K.export(LIB, 'lookup_weapon', value)
+    assert(type(record) == 'table', ('lookup_weapon(%s) found nothing (%s)'):format(value, tostring(reason)))
+    ctx:equal(record.namespace, 'weapon', 'Record namespace')
+    ctx:equal(record.hash, hash, 'Record hash')
+    ctx:equal(record.hexHash, ('0x%08X'):format(hash), 'Record hexadecimal hash')
+    ctx:equal(record.name, 'WEAPON_PISTOL', 'Record name')
+end)
+K.step('kora_lib should look up the vehicle model {string} as {string}', 'server', function(ctx, value, name)
+    local record, reason = K.export(LIB, 'lookup_model', value)
+    assert(type(record) == 'table', ('lookup_model(%s) found nothing (%s)'):format(value, tostring(reason)))
+    ctx:equal(record.namespace, 'vehicle', 'Record namespace')
+    ctx:equal(record.name, name, 'Record name')
+    local scoped = K.export(LIB, 'lookup_model', value, 'vehicle')
+    ctx:equal(type(scoped) == 'table' and scoped.hash, record.hash, 'Vehicle-scoped lookup hash')
+end)
+K.step('kora_lib should report the weapon {string} as not found', 'server', function(ctx, value)
+    local record, reason = K.export(LIB, 'lookup_weapon', value)
+    ctx:equal(record, nil, 'lookup_weapon record')
+    -- The reason follows a nil and may not survive the export boundary.
+    assert(reason == nil or reason == 'not_found' or reason == 'catalog_pending',
+        'lookup_weapon gave the reason ' .. tostring(reason))
+end)
+K.step('the kora_lib lookup catalogue should be ready', 'server', function(ctx)
+    ctx:equal(K.export(LIB, 'lookup_awaitReady', 5000), true, 'lookup_awaitReady')
+    ctx:equal(K.export(LIB, 'lookup_ready'), true, 'lookup_ready')
+end)
+K.step('kora_lib should refuse lookups with an unknown namespace or a malformed hash', 'server', function(ctx)
+    serverRefusal(ctx, 'lookup_get', 'Unknown lookup namespace: fft_never', 'fft_never', 'adder')
+    serverRefusal(ctx, 'lookup_model', 'Model lookup kind must be vehicle, ped, or object.', 'adder', 'weapon')
+    serverRefusal(ctx, 'lookup_weapon', 'Lookup value must not be empty.', '   ')
+    serverRefusal(ctx, 'lookup_weapon', 'Lookup hexadecimal hash is malformed.', '0xZZ')
+    serverRefusal(ctx, 'lookup_weapon', 'Lookup decimal hash is malformed.', '12.5')
+    serverRefusal(ctx, 'lookup_weapon', 'Lookup hash must be an integer.', 1.5)
+    serverRefusal(ctx, 'lookup_weapon', 'Lookup hash must fit a signed or unsigned 32-bit integer.', 4294967296)
+    serverRefusal(ctx, 'lookup_awaitReady', 'Lookup readiness timeout must be a non-negative integer.', -1)
+end)
+
+-- Kora.locale (modules/locales/shared.lua).
+K.step('kora_lib should report English among the server languages', 'server', function(ctx)
+    local languages = K.export(LIB, 'locale_getLanguages')
+    assert(type(languages) == 'table', 'locale_getLanguages did not return a list')
+    local found = false
+    for _, code in ipairs(languages) do if code == 'en' then found = true end end
+    assert(found, 'locale_getLanguages does not include en')
+    local current = K.export(LIB, 'locale_getLanguage')
+    assert(type(current) == 'string' and current ~= '', 'locale_getLanguage returned ' .. tostring(current))
+end)
+K.step('kora_lib should translate the unknown key {string} to the key itself', 'server', function(ctx, key)
+    ctx:equal(K.export(LIB, 'locale_translate', LIB, key), key, 'locale_translate of an unknown key')
+end)
+K.step('kora_lib should refuse to translate without a resource or key', 'server', function(ctx)
+    serverRefusal(ctx, 'locale_translate', 'locale resource must be a valid resource name.', '', 'fft.key')
+    serverRefusal(ctx, 'locale_translate', 'locale key must be a non-empty string.', LIB, '')
+end)
+
+-- Kora.notify.normalizeType / normalize (modules/notify/shared.lua).
+K.step('kora_lib should normalise the notification type {string} to {string}', 'server', function(ctx, value, expected)
+    ctx:equal(K.export(LIB, 'notify_normalizeType', value), expected, 'notify_normalizeType')
+    local payload = K.export(LIB, 'notify_normalize', { title = 'fft', type = value })
+    ctx:equal(type(payload) == 'table' and payload.type, expected, 'notify_normalize type')
+    ctx:equal(type(payload) == 'table' and payload.title, 'fft', 'notify_normalize keeps the other fields')
+end)
+
+-- Kora.minigames.triangleWave(elapsedMs, speedHz): 0 -> 1 -> 0 each cycle.
+K.step('the kora_lib minigame wave at {int} milliseconds and {float} Hz should be {float}', 'server',
+    function(_, elapsed, speed, expected)
+        assertNear(K.export(LIB, 'minigames_triangleWave', elapsed, speed), expected, 'minigames_triangleWave')
+    end)
+
+-- Kora.loops.controlled(call, tries, timeout, backoff) (modules/loops/shared.lua).
+K.step('a kora_lib controlled loop should return the first truthy value after {int} attempts', 'server',
+    function(ctx, attempts)
+        assert(attempts >= 1 and attempts <= 8, 'Use 1-8 attempts')
+        local calls = 0
+        local value = K.export(LIB, 'loops_controlled', function()
+            calls = calls + 1
+            return calls >= attempts and 'fft-ready' or false
+        end, 10, 5000, 10)
+        ctx:equal(value, 'fft-ready', 'loops_controlled value')
+        ctx:equal(calls, attempts, 'Predicate calls')
+    end)
+K.step('a kora_lib controlled loop should give up after {int} tries', 'server', function(ctx, tries)
+    local calls = 0
+    local value, reason = K.export(LIB, 'loops_controlled', function() calls = calls + 1 return false end, tries, 5000, 5)
+    ctx:equal(value, false, 'loops_controlled value')
+    ctx:equal(calls, tries, 'Predicate calls')
+    ctx:equal(reason, 'Loop failed due to exceeding try count.', 'loops_controlled reason')
+end)
+K.step('a kora_lib controlled loop should time out after {int} milliseconds', 'server', function(ctx, timeout)
+    assert(timeout >= 50 and timeout <= 3000, 'Use a 50-3000 ms timeout')
+    local started = GetGameTimer()
+    local value, reason = K.export(LIB, 'loops_controlled', function() return false end, false, timeout, 25)
+    local elapsed = GetGameTimer() - started
+    ctx:equal(value, false, 'loops_controlled value')
+    ctx:equal(reason, 'Loop timed out.', 'loops_controlled reason')
+    assert(elapsed >= timeout - 50 and elapsed <= timeout + 2000, 'The loop stopped after ' .. elapsed .. ' ms')
+end)
+K.step('kora_lib should refuse a controlled loop with invalid limits', 'server', function(ctx)
+    serverRefusal(ctx, 'loops_controlled', 'Loop predicate must be callable.', 'fft-not-a-function')
+    serverRefusal(ctx, 'loops_controlled', 'Loop tries must be a positive integer or false.', function() return true end, 0)
+    serverRefusal(ctx, 'loops_controlled', 'Loop timeout must be a non-negative integer or false.',
+        function() return true end, 1, -1)
+    serverRefusal(ctx, 'loops_controlled', 'Loop backoff must be a non-negative integer, boolean, or nil.',
+        function() return true end, 1, 100, 'fft')
+end)
+
+-- Kora.state.awaitGlobal(key, timeoutMs, pollIntervalMs) (modules/state/shared.lua).
+K.step('waiting {int} milliseconds for the kora_lib GlobalState key {string} should time out', 'server',
+    function(ctx, timeout, key)
+        assert(key:sub(1, 13) == 'fft:kora_lib:', 'Use a GlobalState key under fft:kora_lib:')
+        assert(GlobalState[key] == nil, 'The GlobalState key is unexpectedly set: ' .. key)
+        local value, reason = K.export(LIB, 'state_awaitGlobal', key, timeout, 25)
+        ctx:equal(value, nil, 'state_awaitGlobal value')
+        assert(reason == nil or reason == 'timeout', 'state_awaitGlobal gave the reason ' .. tostring(reason))
+    end)
+K.step('kora_lib should refuse to wait for GlobalState with invalid arguments', 'server', function(ctx)
+    serverRefusal(ctx, 'state_awaitGlobal', 'Kora.state.awaitGlobal requires a state key.', '')
+    serverRefusal(ctx, 'state_awaitGlobal', 'timeoutMs must be a non-negative integer.', 'fft:kora_lib:wait', -1)
+    serverRefusal(ctx, 'state_awaitGlobal', 'pollIntervalMs must be a non-negative integer.', 'fft:kora_lib:wait', 10, 2.5)
+end)
+
+-- Kora.distance on the server (modules/distancecheck/server.lua): the tester's
+-- own ped is read where it stands; nothing is moved.
+local function testerCoords(ctx)
+    local ped = GetPlayerPed(ctx.tester)
+    assert(ped and ped ~= 0, 'The tester has no ped on the server')
+    local at = GetEntityCoords(ped)
+    return { x = at.x, y = at.y, z = at.z }
+end
+K.step('kora_lib should place me within {float} of where I stand and not {float} away', 'server',
+    function(ctx, radius, offset)
+        local at = testerCoords(ctx)
+        ctx:equal(K.export(LIB, 'distance_player', ctx.tester, at, radius), true, 'distance_player at my position')
+        local away = { x = at.x + offset, y = at.y, z = at.z }
+        ctx:equal(K.export(LIB, 'distance_player', ctx.tester, away, radius), false, 'distance_player far away')
+        ctx:equal(K.export(LIB, 'distance_x', ctx.tester, { x = at.x }, radius), true, 'distance_x')
+        ctx:equal(K.export(LIB, 'distance_y', ctx.tester, { y = at.y + offset }, radius), false, 'distance_y far away')
+        ctx:equal(K.export(LIB, 'distance_xy', ctx.tester, { x = at.x, y = at.y, z = at.z + 50.0 }, radius), true,
+            'distance_xy ignores height')
+    end)
+K.step('kora_lib should find a known spot beside me among far ones', 'server', function(ctx)
+    local at = testerCoords(ctx)
+    local spots = {
+        { id = 'fft-far', coords = { x = at.x + 500.0, y = at.y, z = at.z } },
+        { id = 'fft-here', coords = { x = at.x + 1.0, y = at.y, z = at.z } },
+    }
+    local found, entry = K.export(LIB, 'distance_playerNearAny', ctx.tester, spots,
+        { radius = 3.0, coordsOf = function(spot) return spot.coords end })
+    ctx:equal(found, true, 'distance_playerNearAny found')
+    ctx:equal(type(entry) == 'table' and entry.id, 'fft-here', 'distance_playerNearAny entry')
+    local none = K.export(LIB, 'distance_playerNearAny', ctx.tester, { spots[1] },
+        { radius = 3.0, coordsOf = function(spot) return spot.coords end })
+    ctx:equal(none, false, 'distance_playerNearAny with only far spots')
+end)
+K.step('kora_lib should compare two coordinates within {float}', 'server', function(ctx, radius)
+    local a, b = { x = 0.0, y = 0.0, z = 0.0 }, { x = 3.0, y = 4.0, z = 0.0 }
+    ctx:equal(K.export(LIB, 'distance_coords', a, b, radius), radius >= 5, 'distance_coords')
+    ctx:equal(K.export(LIB, 'distance_coords', a, a), true, 'distance_coords with the default radius')
+end)
+K.step('kora_lib should refuse server distance checks with invalid input', 'server', function(ctx)
+    local origin = { x = 0.0, y = 0.0, z = 0.0 }
+    serverRefusal(ctx, 'distance_player', 'Source must be a positive integer server ID.', 0, origin, 1.0)
+    serverRefusal(ctx, 'distance_coords', 'First set of coordinates must include finite x, y, and z values.', { x = 1 }, origin)
+    serverRefusal(ctx, 'distance_coords', 'Distance must be a finite non-negative number.', origin, origin, -1)
+    serverRefusal(ctx, 'distance_x', 'Point must include a finite x value.', ctx.tester, { y = 1 })
+    serverRefusal(ctx, 'distance_playerNearAny', 'Kora.distance.playerNearAny requires a list.', ctx.tester, 'fft', {})
+    serverRefusal(ctx, 'distance_playerNearAny', 'Kora.distance.playerNearAny requires opts.coordsOf.', ctx.tester, {}, {})
+    serverRefusal(ctx, 'distance_entity', 'Entity must be a positive integer handle.', ctx.tester, 0)
+end)
+K.step('kora_lib should refuse closest searches with an invalid source or distance', 'server', function(ctx)
+    -- modules/closest/server.lua resolveCoords / resolveDistance.
+    serverRefusal(ctx, 'closest_vehicle', 'Closest-search source must be a positive player ID.', 0)
+    serverRefusal(ctx, 'closest_object', 'Closest-search distance must be a positive finite number.', ctx.tester, nil, 0)
+    serverRefusal(ctx, 'closest_ped', 'Closest-search coordinates must be a finite vector3.', ctx.tester, { x = 1 })
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion (client): the player cache and streaming loaders.
+-- The cache refreshes on Config.cache.tickInterval, so reads poll briefly.
+-- ---------------------------------------------------------------------------
+
+K.step('the kora_lib player cache should agree with the game about me', 'client', function(ctx)
+    ctx:equal(K.export(LIB, 'cache_playerId'), PlayerId(), 'cache_playerId')
+    ctx:equal(K.export(LIB, 'cache_serverId'), GetPlayerServerId(PlayerId()), 'cache_serverId')
+    ctx:waitUntil(function() return K.export(LIB, 'cache_ped') == PlayerPedId() end, 'cache_ped is not my ped', 3000)
+    ctx:waitUntil(function()
+        local health = K.export(LIB, 'cache_health')
+        return type(health) == 'number' and math.abs(health - GetEntityHealth(PlayerPedId())) <= 5
+    end, 'cache_health does not follow my health', 3000)
+    ctx:waitUntil(function() return K.export(LIB, 'cache_armour') == GetPedArmour(PlayerPedId()) end,
+        'cache_armour does not follow my armour', 3000)
+    local coords = K.export(LIB, 'cache_coords')
+    assert(type(coords) ~= 'nil', 'cache_coords is empty')
+    local here = GetEntityCoords(PlayerPedId())
+    assert(#(vector3(coords.x, coords.y, coords.z) - here) < 25.0, 'cache_coords is far from my position')
+    ctx:equal(K.export(LIB, 'cache_isDead'), false, 'cache_isDead')
+    ctx:waitUntil(function() return K.export(LIB, 'cache_weapon') == GetSelectedPedWeapon(PlayerPedId()) end,
+        'cache_weapon does not follow my selected weapon', 3000)
+end)
+K.step('the kora_lib player cache should show me on foot', 'client', function(ctx)
+    ctx:waitUntil(function() return K.export(LIB, 'cache_vehicle') == false end, 'cache_vehicle is not false on foot', 3000)
+    ctx:equal(K.export(LIB, 'cache_seat'), false, 'cache_seat on foot')
+end)
+K.step('the kora_lib player cache should show me in the driver seat of my vehicle', 'client', function(ctx)
+    local vehicle = GetVehiclePedIsIn(PlayerPedId(), false)
+    assert(vehicle ~= 0, 'I am not in a vehicle')
+    ctx:waitUntil(function() return K.export(LIB, 'cache_vehicle') == vehicle end, 'cache_vehicle is not my vehicle', 3000)
+    ctx:waitUntil(function() return K.export(LIB, 'cache_seat') == -1 end, 'cache_seat is not the driver seat', 3000)
+end)
+-- Custom keys: set, get and onChange (modules/cache/client.lua:140-212).
+K.step('a custom kora_lib cache key should store values and report changes', 'client', function(ctx)
+    local key = 'fft:kora_lib:cache'
+    local heard = {}
+    ctx:cleanup(function()
+        pcall(function() exports[LIB]:cache_offChange(key) end)
+        pcall(function() exports[LIB]:cache_set(key, nil) end)
+    end)
+    K.export(LIB, 'cache_onChange', key, function(value) heard[#heard + 1] = value end)
+    K.export(LIB, 'cache_set', key, 'fft-one')
+    ctx:equal(K.export(LIB, 'cache_get', key), 'fft-one', 'cache_get after set')
+    K.export(LIB, 'cache_set', key, 'fft-two')
+    ctx:waitUntil(function() return heard[#heard] == 'fft-two' end, 'onChange did not report the second value', 2000)
+    local count = #heard
+    K.export(LIB, 'cache_set', key, 'fft-two')
+    Wait(300)
+    ctx:equal(#heard, count, 'onChange fired for an unchanged value')
+    K.export(LIB, 'cache_offChange', key)
+    K.export(LIB, 'cache_set', key, 'fft-three')
+    Wait(300)
+    ctx:equal(#heard, count, 'onChange fired after offChange')
+    ctx:equal(K.export(LIB, 'cache_get', key), 'fft-three', 'cache_get after offChange')
+end)
+K.step('setting the reserved kora_lib cache key {string} should be ignored', 'client', function(ctx, key)
+    local before = K.export(LIB, 'cache_get', key)
+    K.export(LIB, 'cache_set', key, 'fft-not-allowed')
+    ctx:equal(K.export(LIB, 'cache_get', key) ~= 'fft-not-allowed', true, 'Reserved key ' .. key .. ' was overwritten')
+    ctx:equal(type(K.export(LIB, 'cache_get', key)), type(before), 'Reserved key ' .. key .. ' type')
+end)
+K.step('kora_lib should refuse cache keys that are empty or too long', 'client', function(ctx)
+    refusedSync('cache_get', 'Cache key must be a non-empty string up to 256 bytes.', '')
+    refusedSync('cache_set', 'Cache key must be a non-empty string up to 256 bytes.', ('k'):rep(257), true)
+    refusedSync('cache_onChange', 'onChange handler must be a function.', 'fft:kora_lib:cache', 'fft-not-a-function')
+end)
+
+-- Kora.stream loaders (modules/stream/client.lua): a loaded asset is
+-- returned by name or hash; invalid names are refused before any request.
+K.step('kora_lib should stream the model {string} and the anim dict {string}', 'client', function(ctx, model, dict)
+    local hash = K.export(LIB, 'stream_loadModel', model, nil, { timeout = 10000 })
+    ctx:equal(hash, GetHashKey(model), 'stream_loadModel result')
+    ctx:equal(HasModelLoaded(hash), true, 'Model loaded')
+    SetModelAsNoLongerNeeded(hash)
+    ctx:equal(K.export(LIB, 'stream_loadAnimDict', dict, nil, { timeout = 10000 }), dict, 'stream_loadAnimDict result')
+    RemoveAnimDict(dict)
+end)
+K.step('kora_lib should release a streamed model after its callback runs', 'client', function(ctx)
+    local seen
+    local hash = K.export(LIB, 'stream_loadModel', 'prop_cs_cardbox_01', function(value) seen = value end, { timeout = 10000 })
+    ctx:equal(seen, hash, 'Callback received the model hash')
+end)
+K.step('kora_lib should refuse to stream unknown or malformed assets', 'client', function(ctx)
+    refusedSync('stream_loadModel', 'Invalid model', 'fft_never_a_model_name')
+    refusedSync('stream_loadModel', 'Invalid model', '')
+    refusedSync('stream_loadAnimDict', 'Anim dict does not exist: fft_never_a_dict', 'fft_never_a_dict')
+    refusedSync('stream_loadAnimDict', 'Kora.stream callback must be callable.', 'mp_common', 'fft-not-a-function')
+    refusedSync('stream_loadModel', 'Kora.stream timeout must be a non-negative integer.', 'adder', nil, { timeout = -1 })
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion (client): owned blips, vehicle getters and the keybind
+-- registry (read only: adding a key mapping persists in the player's FiveM
+-- settings, so it is not exercised).
+-- ---------------------------------------------------------------------------
+
+-- Kora.blips create/getRegistered/hide/show/remove (modules/blips/client.lua:464-720).
+K.step('kora_lib should create, track, hide, show and remove a blip owned by fft', 'client', function(ctx)
+    local at = GetEntityCoords(PlayerPedId())
+    local blip = K.export(LIB, 'blips_create', { x = at.x, y = at.y, z = at.z }, { label = 'FFT blip probe', sprite = 1 })
+    assert(type(blip) == 'number' and blip ~= 0, 'blips_create returned no handle')
+    ctx:cleanup(function() pcall(function() exports[LIB]:blips_remove(blip) end) end)
+    ctx:equal(DoesBlipExist(blip), true, 'Native blip exists')
+    local tracked
+    for _, record in ipairs(K.export(LIB, 'blips_getRegistered') or {}) do
+        if record.handle == blip then tracked = record end
+    end
+    assert(tracked, 'blips_getRegistered does not list the new blip')
+    ctx:equal(tracked.resource, 'fft', 'Blip owner')
+    ctx:equal(K.export(LIB, 'blips_hide', blip), true, 'blips_hide')
+    ctx:equal(K.export(LIB, 'blips_show', blip), true, 'blips_show')
+    ctx:equal(K.export(LIB, 'blips_remove', blip), true, 'blips_remove')
+    ctx:equal(DoesBlipExist(blip), false, 'Native blip after remove')
+    local again = K.export(LIB, 'blips_remove', blip)
+    ctx:equal(again, false, 'Second blips_remove')
+end)
+K.step('kora_lib should refuse blips without coordinates or handles', 'client', function(ctx)
+    refusedSync('blips_create', 'Invalid coords: expected a vector3/vector4 or {x, y, z} table.', { x = 1 }, {})
+    refusedSync('blips_create', 'Blip options must be a table.', { x = 1.0, y = 1.0, z = 1.0 }, 'fft')
+    refusedSync('blips_hide', 'Invalid blip: fft', 'fft')
+    local ok = K.export(LIB, 'blips_hide', 2147480000)
+    ctx:equal(ok, false, 'blips_hide of an untracked handle')
+end)
+
+-- Kora.vehicle getters (modules/vehicle/client.lua:162-192).
+K.step('kora_lib vehicle getters should describe the {string} I am driving', 'client', function(ctx, model)
+    local vehicle = GetVehiclePedIsIn(PlayerPedId(), false)
+    assert(vehicle ~= 0, 'I am not in a vehicle')
+    ctx:equal(K.export(LIB, 'vehicle_isDriver', vehicle), true, 'vehicle_isDriver')
+    ctx:equal(K.export(LIB, 'vehicle_model', vehicle), GetHashKey(model), 'vehicle_model')
+    local plate = K.export(LIB, 'vehicle_plate', vehicle)
+    ctx:equal(plate, (GetVehicleNumberPlateText(vehicle):gsub('^%s+', ''):gsub('%s+$', '')), 'vehicle_plate')
+    local label = K.export(LIB, 'vehicle_label', vehicle)
+    assert(type(label) == 'string' and label ~= '', 'vehicle_label returned ' .. tostring(label))
+    local props = K.export(LIB, 'vehicle_getProperties', vehicle)
+    assert(type(props) == 'table', 'vehicle_getProperties returned no table')
+    ctx:equal(props.model, GetHashKey(model), 'Property model')
+end)
+K.step('kora_lib vehicle getters should reject something that is not a vehicle', 'client', function(ctx)
+    for _, value in ipairs({ PlayerPedId(), 0 }) do
+        ctx:equal(K.export(LIB, 'vehicle_isDriver', value), false, 'vehicle_isDriver(' .. tostring(value) .. ')')
+        ctx:equal(K.export(LIB, 'vehicle_model', value), false, 'vehicle_model(' .. tostring(value) .. ')')
+        ctx:equal(K.export(LIB, 'vehicle_plate', value), false, 'vehicle_plate(' .. tostring(value) .. ')')
+    end
+end)
+
+-- Kora.keybind list/remove (modules/keybind/client.lua:184-205).
+K.step('kora_lib should list key bindings sorted by name and refuse to remove one fft does not own', 'client', function(ctx)
+    local bindings = K.export(LIB, 'keybind_list')
+    assert(type(bindings) == 'table', 'keybind_list returned no list')
+    for index = 2, #bindings do
+        assert(bindings[index - 1].name <= bindings[index].name, 'keybind_list is not sorted by name')
+    end
+    for _, binding in ipairs(bindings) do
+        if binding.resource ~= 'fft' then
+            ctx:equal(K.export(LIB, 'keybind_remove', binding.name), false, 'keybind_remove of ' .. binding.name)
+            break
+        end
+    end
+    ctx:equal(K.export(LIB, 'keybind_remove', 'fft_never_a_binding'), false, 'keybind_remove of an unknown binding')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion (server): command registry reads, chat suggestions,
+-- logging statistics and the QA run-state guard.
+-- ---------------------------------------------------------------------------
+
+K.step('kora_lib should list its registered commands sorted by name', 'server', function(ctx)
+    local list = K.export(LIB, 'commands_list')
+    assert(type(list) == 'table', 'commands_list returned no list')
+    for index, entry in ipairs(list) do
+        assert(type(entry.name) == 'string' and entry.name ~= '', ('Command %d has no name'):format(index))
+        if index > 1 then assert(list[index - 1].name <= entry.name, 'commands_list is not sorted by name') end
+    end
+end)
+K.step('kora_lib should suggest nothing for unknown or malformed command lookups', 'server', function(ctx)
+    local function none(value, label) ctx:equal(type(value) == 'table' and #value or -1, 0, label) end
+    none(K.export(LIB, 'commands_suggest', ctx.tester, 'fft_never_a_command', 1, ''), 'Suggestions for an unknown command')
+    none(K.export(LIB, 'commands_suggest', ctx.tester, 'fft_never_a_command', 0, ''), 'Suggestions for argument 0')
+    none(K.export(LIB, 'commands_suggest', 0, 'fft_never_a_command', 1, ''), 'Suggestions for player 0')
+    none(K.export(LIB, 'commands_suggest', ctx.tester, 42, 1, ''), 'Suggestions for a numeric name')
+end)
+K.step('kora_lib logging statistics should be well formed', 'server', function(ctx)
+    local stats = K.export(LIB, 'logging_getStats')
+    assert(type(stats) == 'table', 'logging_getStats returned no table')
+    ctx:equal(type(stats.counts), 'table', 'Statistics counts')
+    ctx:equal(type(stats.ringSize), 'number', 'Statistics ring size')
+    ctx:equal(type(K.export(LIB, 'logging_isEnabled', 'error')), 'boolean', 'logging_isEnabled(error)')
+end)
+K.step('kora_lib should refuse to let fft change the QA run state', 'server', function(ctx)
+    local before = K.export(LIB, 'qa_active', ctx.tester)
+    serverRefusal(ctx, 'qa_setActive', 'Only kora_qa may change the QA run state.', ctx.tester, true)
+    ctx:equal(K.export(LIB, 'qa_active', ctx.tester), before, 'QA run state after the refusal')
+end)

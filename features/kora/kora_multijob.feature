@@ -427,3 +427,24 @@ Feature: kora_multijob saved job roster
       | mechanic   | Player must change active job first.     |
       | unemployed | Player does not have that removable job. |
       | bodyshop   | Player does not have that removable job. |
+
+  # Coverage expansion: the setDuty server export.
+  @server
+  Scenario: The setDuty export toggles duty for a job that allows it
+    Given I am on duty as "mechanic" at grade 1
+    When kora_multijob sets me off duty through its export
+    Then I should be off duty
+    When kora_multijob sets me on duty through its export
+    Then I should be on duty
+
+  @server @rejection
+  Scenario Outline: The setDuty export refuses <case>
+    Given I am on duty as "<job>" at grade 1
+    Then kora_multijob should refuse to set my duty to "<value>" as "<reason>"
+
+    # Config.disabledDuty.police = true in kora_multijob/shared/config.lua; a
+    # server that unlocks police duty there will see the police row accepted.
+    Examples:
+      | case                          | job      | value | reason               |
+      | a value that is not a boolean | mechanic | yes   | invalid_duty         |
+      | a police duty change          | police   | off   | duty_change_disabled |

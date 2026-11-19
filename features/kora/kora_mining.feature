@@ -376,3 +376,56 @@ Feature: kora_mining pickaxe shop, rock gating and smelting stations
     Given I lack the mining creator permission
     When I run the command "miningCreator"
     Then the mining creator should have refused to open
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: mining creator pickaxe-shop callbacks, judged by the
+  # tester's `command` ACE, and mine-profile refusals. Nothing is saved.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The mining creator serves the pickaxe shop settings to admins only
+    Given my client listens for my mining creator permission
+    And the server tells my client whether I may use the mining creator
+    Then the mining creator should serve the pickaxe shop settings to admins only
+
+  @rejection
+  Scenario Outline: The mining creator refuses the pickaxe price <price> for <item>
+    Given my client listens for my mining creator permission
+    And the server tells my client whether I may use the mining creator
+    Then the mining creator should refuse the pickaxe price "<price>" for "<item>" as "<reason>"
+
+    Examples:
+      | price     | item              | reason                                              |
+      | 100       | fft_never_a_pick  | Unknown pickaxe.                                    |
+      | -1        | bronze_pickaxe    | Price must be a whole number from 0 to 100,000,000. |
+      | 2.5       | bronze_pickaxe    | Price must be a whole number from 0 to 100,000,000. |
+      | 100000001 | bronze_pickaxe    | Price must be a whole number from 0 to 100,000,000. |
+      | fft       | bronze_pickaxe    | Price must be a whole number from 0 to 100,000,000. |
+
+  @rejection
+  Scenario Outline: The mining creator refuses to save the vendor model "<model>"
+    Given my client listens for my mining creator permission
+    And the server tells my client whether I may use the mining creator
+    Then the mining creator should refuse to save the vendor model "<model>" as "Enter a valid ped model."
+
+    Examples:
+      | model                                                             |
+      | bad model                                                         |
+      | s_m_m;drop                                                        |
+      | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |
+
+  @rejection
+  Scenario: The mining creator refuses more than 100 vendor locations
+    Given my client listens for my mining creator permission
+    And the server tells my client whether I may use the mining creator
+    Then the mining creator should refuse to save 101 vendor locations
+
+  @rejection
+  Scenario: A mining profile for an unknown rock or malformed spot is refused
+    Then the mining profile for rock "fft_never_a_rock" spot 1 should be refused as unavailable
+    And the mining profile should ignore a malformed spot
+
+  @rejection
+  Scenario: Finishing a smelt that was never started gives nothing
+    Given I remember how many "bronze_bar" I have
+    Then finishing a smelt I never started should be refused
+    And I should have 0 more "bronze_bar" than before

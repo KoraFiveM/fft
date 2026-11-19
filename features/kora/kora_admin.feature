@@ -391,3 +391,35 @@ Feature: kora_admin permission gates and self-service commands
   @server
   Scenario: The Discord settings publish only an enabled flag and public identifiers
     Then the Discord settings should publish only an enabled flag and public identifiers
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: admin menu data callbacks, judged by the tester's role.
+  # ---------------------------------------------------------------------------
+
+  Scenario: Admin menu player data is answered to support staff and refused below
+    Given I learn my staff level
+    Then the admin menu player list should include me for support staff only
+    And the admin menu profile of me should match my character for support staff only
+
+  @rejection
+  Scenario: The admin menu profile of an unknown player is refused
+    Given I learn my staff level
+    Then the admin menu profile of player 65000 should be refused as "that player is not online"
+
+  Scenario: Admin menu roles, resources and audit log are answered to admins only
+    Given I learn my staff level
+    Then the admin menu role list should include the job "police" for admins only
+    And the admin menu resource list should show kora_admin started for admins only
+    And the admin menu audit log should answer a page for admins only
+
+  # Coverage expansion: configuration editor reads and report chat refusals.
+  Scenario: The configuration catalogue is served to configuration editors only
+    Given my client listens for my configuration editor access
+    And the server tells my client whether I may edit configuration
+    Then the configuration catalogue should be served to configuration editors only
+    And reading the configuration of a non-text resource should be refused
+
+  @rejection
+  Scenario: Report chat callbacks refuse a report that does not exist
+    Then my report 999999999 should not be found
+    And sending a non-text message to report 999999999 should be refused

@@ -615,3 +615,9 @@ Feature: kora_truckerjob freight dispatch
     Then the freight dispatch should answer with a "success" notice containing "Contract cancelled."
     And my freight trailer should have been released
     And the freight board should show no active contract of mine
+
+  # Coverage expansion: returning a vehicle that was never dispatched.
+  @rejection
+  @slow
+  Scenario: Returning a freight vehicle that was never dispatched is refused
+    Then returning a freight vehicle I was never given should be refused

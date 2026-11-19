@@ -771,3 +771,115 @@ Feature: kora_inventory exports, inventory screen and the 24/7 shop
     And the craft recipe "fft_test_coffee" should be gone
     And removing craft recipe "fft_test_coffee" should return false
     And removing craft recipe "fft_test_never_made" should return false
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: persistence status, weapon state reads, carried and
+  # equipped weapons, provider-only bridges.
+  # ---------------------------------------------------------------------------
+
+  @server
+  Scenario: The persistence status is consistent
+    Then the kora_inventory persistence status should be consistent
+
+  @server
+  Scenario: Weapon state is reported for a weapon and not for an ordinary item
+    Given I hold 1 "weapon_pistol"
+    And I hold 1 "water_bottle"
+    Then kora_inventory should report weapon state for my "weapon_pistol"
+    And kora_inventory should report no weapon state for my "water_bottle"
+    And kora_inventory should report no weapon state for an empty or invalid slot
+
+  @server
+  Scenario: Carried and equipped weapon reads are well formed
+    Given I hold 1 "weapon_pistol"
+    Then kora_inventory should list only weapons as carried on my body
+    And kora_inventory should report my equipped weapon as nothing or a held slot
+
+  @server @rejection
+  Scenario: Provider-only bridges refuse fft before doing any work
+    Then kora_inventory should refuse a player exchange from fft
+    And kora_inventory should refuse a stash recovery claim with invalid arguments
+    And kora_inventory should refuse a stash recovery claim for a stash fft does not own
+    And kora_inventory should refuse the legacy police trash bridge to anyone but kora_sql
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: legacy qb-inventory / qb-weapons surface sent the way
+  # a stock client would. Nothing may be minted, moved, repaired or reloaded.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario: Retired qb-weapons callbacks answer safely
+    Then the retired qb-weapons callbacks should answer safely
+    And the legacy weapon ammo callback should report no weapon in slot 999
+
+  @rejection
+  Scenario: A stock client cannot refill, repair or reclaim a weapon
+    Given I hold 1 "weapon_pistol"
+    And my client listens for my weapon slot
+    And I remember the weapon state of my "weapon_pistol"
+    When a stock client tries to refill, repair and reclaim my weapon
+    Then the weapon state of my "weapon_pistol" should be unchanged
+
+  @rejection
+  Scenario: A stock client without an open inventory cannot drop, give or move items
+    Given I hold 2 "water_bottle"
+    And I remember how many "water_bottle" I have
+    When a stock client without an open inventory tries to drop, give and move items
+    Then I should have 0 fewer "water_bottle" than before
+
+  @rejection
+  Scenario: Forged legacy purchases are refused
+    Given I remember my "cash" balance
+    And I remember my "bank" balance
+    When forged legacy purchases should be refused
+    Then my "cash" balance should be unchanged
+    And my "bank" balance should be unchanged
+
+  Scenario: The legacy drop list is readable
+    Then the legacy drop list should be readable
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: server weapon-state exports on the tester's own weapon.
+  # ---------------------------------------------------------------------------
+
+  @server
+  Scenario Outline: Weapon ammo set to <ammo> is stored as <stored>
+    Given I hold 1 "weapon_pistol"
+    Then setting the ammo of my "weapon_pistol" to <ammo> should store <stored>
+
+    Examples:
+      | ammo  | stored |
+      | 12    | 12     |
+      | 0     | 0      |
+      | -5    | 0      |
+      | 20000 | 10000  |
+
+  @server
+  Scenario Outline: Weapon durability set to <value> is stored as <stored>
+    Given I hold 1 "weapon_pistol"
+    Then setting the durability of my "weapon_pistol" to <value> should store <stored>
+
+    Examples:
+      | value | stored |
+      | 75.0  | 75.0   |
+      | 150.0 | 100.0  |
+      | -10.0 | 0.0    |
+
+  @server
+  Scenario: Wearing a weapon lowers its durability and never below zero
+    Given I hold 1 "weapon_pistol"
+    And setting the durability of my "weapon_pistol" to 50.0 should store 50.0
+    Then wearing my "weapon_pistol" by 12.5 should leave 37.5 durability
+    And wearing my "weapon_pistol" by 100.0 should leave 0.0 durability
+
+  @server @rejection
+  Scenario: Weapon state exports refuse bad input and non-weapons
+    Given I hold 1 "weapon_pistol"
+    And I hold 1 "water_bottle"
+    Then the weapon state exports should refuse bad input for my "weapon_pistol"
+    And the weapon state exports should refuse a slot that holds "water_bottle"
+
+  @server
+  Scenario: Weapon metadata is prepared with clamped values
+    Then preparing weapon metadata for "weapon_pistol" should clamp durability 250.0 and ammo 5
+    And preparing weapon metadata for "water_bottle" should be refused as not a weapon

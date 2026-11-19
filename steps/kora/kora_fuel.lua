@@ -349,3 +349,26 @@ K.step('my GPS waypoint should be near {float} {float}', 'client', function(ctx,
     local distance = math.sqrt((at.x - x) ^ 2 + (at.y - y) ^ 2)
     assert(distance < 5.0, ('The waypoint is %.1f m from %.2f %.2f'):format(distance, x, y))
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: kora_fuel:server:purchase sent directly with requests
+-- the server must refuse before any progress bar or charge (server/main.lua:42-99).
+-- ---------------------------------------------------------------------------
+
+local FUEL_FORGERIES = {
+    ['an unknown account'] = { 1, 'fft_never_an_account', 10, 10, 'pump' },
+    ['a fractional amount'] = { 1, 'cash', 1.5, 10, 'pump' },
+    ['a full tank'] = { 1, 'cash', 10, 100, 'pump' },
+    ['a zero amount'] = { 1, 'cash', 0, 10, 'pump' },
+    ['more than the tank holds'] = { 1, 'cash', 500, 10, 'pump' },
+}
+K.step('a forged fuel purchase with {string} should be refused with {string}', 'client', function(ctx, case, reason)
+    local args = assert(FUEL_FORGERIES[case], 'Unknown fuel forgery case: ' .. case)
+    local answer
+    RegisterNetEvent('kora_fuel:client:serviceResult')
+    ctx:on('kora_fuel:client:serviceResult', function(ok, message) answer = { ok = ok, message = message } end)
+    TriggerServerEvent('kora_fuel:server:purchase', table.unpack(args))
+    ctx:waitUntil(function() return answer ~= nil end, 'The fuel service did not answer', 5000)
+    ctx:equal(answer.ok, false, 'Fuel service result')
+    ctx:equal(answer.message, reason, 'Fuel service refusal')
+end)

@@ -524,3 +524,87 @@ K.step('the handcuff exports should agree', 'client', function(ctx)
     ctx:equal(type(legacy), 'boolean', 'isHandcuffed type')
     ctx:equal(upstream, legacy, 'IsHandcuffed matches isHandcuffed')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy qb-policejob server events
+-- (server/compat/police.lua) sent the way a stock client would, aimed only at
+-- the tester or at an id no real player has. Every one is refused before it
+-- acts (Police.cuff/search/seizeCash/seizeDriverLicense/escort/putInVehicle/
+-- takeOutVehicle/bill/jailPlayer/rob/startDrag/deEscort guards) and answers
+-- with QBCore:Notify, which this suite listens for directly.
+-- ---------------------------------------------------------------------------
+
+local LEGACY_POLICE_ARGS = {
+    ['police:server:CuffPlayer'] = function(target) return target end,
+    ['police:server:SearchPlayer'] = function(target) return target end,
+    ['police:server:SeizeCash'] = function(target) return target end,
+    ['police:server:SeizeDriverLicense'] = function(target) return target end,
+    ['police:server:EscortPlayer'] = function(target) return target end,
+    ['police:server:DeEscort'] = function(target) return target end,
+    ['police:server:KidnapPlayer'] = function(target) return target end,
+    ['police:server:PutPlayerInVehicle'] = function(target) return target, 1, -1 end,
+    ['police:server:SetPlayerOutVehicle'] = function(target) return target end,
+    ['police:server:BillPlayer'] = function(target) return target, 500, 'fft legacy bill' end,
+    ['police:server:BillPlayer:badAmount'] = function(target) return target, -5, 'fft legacy bill' end,
+    ['police:server:JailPlayer'] = function(target) return target, 1, 'fft legacy jail' end,
+    ['police:server:RobPlayer'] = function(target) return target end,
+    ['kora_police:server:jailPlayer'] = function(target) return target, 1, 'fft native jail' end,
+    ['kora_police:server:setTracker'] = function(target) return target, true end,
+}
+
+-- Native events that answer through kora_lib notifications (Police.notify).
+K.step('I send the native police event {string} at myself', 'client', function(_, event)
+    local allowed = { ['kora_police:server:takeOutVehicle'] = true }
+    assert(allowed[event], 'Not a native police event in this suite: ' .. event)
+    TriggerServerEvent(event, GetPlayerServerId(PlayerId()))
+end)
+K.step('I ask the police impound to release the plate {string}', 'client', function(_, plate)
+    TriggerServerEvent('kora_police:server:retrieveImpound', plate)
+end)
+
+K.step('I listen for legacy police notifications', 'client', function(ctx)
+    ctx.state.legacyPoliceNotes = {}
+    RegisterNetEvent('QBCore:Notify')
+    ctx:on('QBCore:Notify', function(text)
+        if type(text) == 'string' then table.insert(ctx.state.legacyPoliceNotes, text) end
+    end)
+end)
+local function sendLegacyPolice(ctx, key, target, expected)
+    local build = assert(LEGACY_POLICE_ARGS[key], 'Not a legacy police event in this suite: ' .. key)
+    assert(ctx.state.legacyPoliceNotes, 'Listen for legacy police notifications first')
+    local event = key:gsub(':badAmount$', '')
+    local start = #ctx.state.legacyPoliceNotes
+    TriggerServerEvent(event, build(target))
+    ctx:waitUntil(function()
+        for index = start + 1, #ctx.state.legacyPoliceNotes do
+            if K.contains(ctx.state.legacyPoliceNotes[index], expected) then return true end
+        end
+    end, ('%s was not refused with "%s"'):format(event, expected), 5000, function()
+        return ' (heard: ' .. table.concat(ctx.state.legacyPoliceNotes, ' | ') .. ')'
+    end)
+end
+K.step('the legacy police event {string} at myself should be refused with {string}', 'client', function(ctx, key, expected)
+    sendLegacyPolice(ctx, key, GetPlayerServerId(PlayerId()), expected)
+end)
+K.step('the legacy police event {string} at player {int} should be refused with {string}', 'client',
+    function(ctx, key, target, expected)
+        assert(target >= 60000, 'Use an id no real player has (60000 or above)')
+        sendLegacyPolice(ctx, key, target, expected)
+    end)
+K.step('I should not be handcuffed according to kora_police', 'client', function(ctx)
+    Wait(500)
+    ctx:equal(K.export('kora_police', 'isHandcuffed'), false, 'isHandcuffed')
+end)
+
+-- Coverage expansion: legacy evidence collection sent by a stock client for
+-- markers that do not exist (server/evidence.lua:182-324). Nothing is minted.
+K.step('a stock client tries to collect and clear evidence that does not exist', 'client', function()
+    TriggerServerEvent('evidence:server:AddToInventory', 999999)
+    TriggerServerEvent('evidence:server:AddBlooddropToInventory', 999999)
+    TriggerServerEvent('evidence:server:AddFingerprintToInventory', 999999)
+    TriggerServerEvent('evidence:server:AddCasingToInventory', 999999)
+    TriggerServerEvent('evidence:server:ClearBlooddrops', { 999999 })
+    TriggerServerEvent('evidence:server:ClearCasings', { 999999 })
+    TriggerServerEvent('evidence:server:UpdateStatus', { fft_never_a_status = { 'fft', 60 } })
+    Wait(1000)
+end)

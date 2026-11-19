@@ -398,3 +398,55 @@ K.step('toggling the business console world debug twice should switch it and swi
     assert(messages['Local world debug enabled.'] and messages['Local world debug hidden.'],
         ('Debug toggles answered "%s" then "%s"'):format(tostring(first), tostring(second)))
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: refusals of the business admin, management, till and
+-- payment callbacks for unknown ids and invalid input. Every refusal here
+-- returns before State.persist, Logs.record, a dispatch alert or a bill
+-- (server/admin.lua:28-182, server/pos.lua:481-560, server/payment.lua:46-55,
+-- server/staff.lua:142-145). Only made-up fft_ ids are used.
+-- ---------------------------------------------------------------------------
+
+local function jobCallback(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+local function refusedCall(ctx, name, reason, ...)
+    local result, err = jobCallback(name, ...)
+    assert(not result, ('%s accepted the request'):format(name))
+    ctx:equal(err, reason, name .. ' refusal')
+end
+
+K.step('the business callbacks should refuse the unknown business {string}', 'client', function(ctx, id)
+    assert(id:sub(1, 4) == 'fft_', 'Use a made-up fft_ business id')
+    -- authorise() resolves the business before checking the role.
+    for _, name in ipairs({ 'deleteBusiness', 'removeModule', 'logs', 'balance' }) do
+        refusedCall(ctx, 'kora_jobcreator:server:' .. name, 'Unknown business.', id, 1)
+        Wait(250)
+    end
+    refusedCall(ctx, 'kora_jobcreator:server:editBusiness', 'Unknown business.', id, { label = 'fft' })
+    refusedCall(ctx, 'kora_jobcreator:server:saveModule', 'Unknown business.', id, 1, {})
+    refusedCall(ctx, 'kora_jobcreator:server:setDuty', 'Unknown business.', id, true)
+end)
+K.step('the till callbacks should refuse the unknown till {string}', 'client', function(ctx, id)
+    assert(id:sub(1, 4) == 'fft_', 'Use a made-up fft_ till id')
+    refusedCall(ctx, 'kora_jobcreator:server:setTillPrice', 'Unknown till.', id, 1, 10)
+    refusedCall(ctx, 'kora_jobcreator:server:panic', 'Unknown till.', SEED, id)
+end)
+K.step('requesting a business payment from player {int} should be refused as {string}', 'client', function(ctx, target, reason)
+    assert(target == 0 or target >= 60000 or target == GetPlayerServerId(PlayerId()),
+        'Only bill nobody, yourself or an id no real player has')
+    refusedCall(ctx, 'kora_jobcreator:server:requestPayment', reason, target)
+end)
+K.step('requesting a business payment from myself should be refused as {string}', 'client', function(ctx, reason)
+    refusedCall(ctx, 'kora_jobcreator:server:requestPayment', reason, GetPlayerServerId(PlayerId()))
+end)

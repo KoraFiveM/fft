@@ -369,3 +369,16 @@ Feature: kora_newsjob Weazel News job
     Then I should be holding the news prop for "newsmic"
     Given my job is "unemployed" at grade 1
     Then I should not be holding the news prop for "newsmic"
+
+  # Coverage expansion: the news vehicle spawn callback sent directly.
+  @rejection
+  Scenario Outline: A direct news vehicle spawn is refused for <case>
+    Given my job is "<job>" at grade <grade>
+    Then a direct news vehicle spawn at "<location>" slot <slot> should be refused
+
+    Examples:
+      | case                         | job        | grade | location | slot |
+      | a player who is not news     | unemployed | 0     | vehicle  | 1    |
+      | an unknown garage            | news       | 1     | boat     | 1    |
+      | an unknown vehicle slot      | news       | 1     | vehicle  | 99   |
+      | a news worker far from it    | news       | 1     | heli     | 1    |

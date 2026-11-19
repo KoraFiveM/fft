@@ -723,3 +723,18 @@ Feature: kora_target option visibility, gating and selection
     When ox_target targeting is enabled again
     Then kora_target should report enabled "true"
     And starting to target should work
+
+  # Coverage expansion: addTargetBone.
+  @world
+  Scenario: A bone option is registered on an entity and removed again
+    Given I am driving a temporary "blista"
+    Then kora_target should register a bone option on my vehicle and remove it again
+
+  @rejection
+  Scenario Outline: addTargetBone refuses <case>
+    Then kora_target addTargetBone with "<case>" should be refused
+
+    Examples:
+      | case                   |
+      | bone given as a number |
+      | no options             |

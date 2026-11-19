@@ -583,3 +583,215 @@ Feature: kora_lib shared interface and callback library
   @server @rejection
   Scenario: Permission helpers refuse invalid players and level lists
     Then kora_lib should refuse permission checks without a valid player or level list
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: timers, limiter, nearest, lookup, locales, notify
+  # aliases, minigame motion, controlled loops, GlobalState and distance.
+  # ---------------------------------------------------------------------------
+
+  @server @slow
+  Scenario: A debounce runs once with the last arguments and a cancelled one never runs
+    Then a kora_lib debounce of 300 milliseconds should run once with the last arguments of a burst
+    And a cancelled kora_lib debounce should never run
+
+  @server
+  Scenario: A throttle lets one call through per interval until it is reset
+    Then a kora_lib throttle of 60000 milliseconds should let one call through until it is reset
+    And the kora_lib timer count should include a pending timeout until it is cleared
+
+  @server @rejection
+  Scenario: Debounce and throttle refuse invalid arguments
+    Then kora_lib should refuse debounce and throttle without a callable or with a negative wait
+
+  @server
+  Scenario Outline: A rate limiter allows <max> calls per window and frees the oldest slot when it expires
+    Then a kora_lib rate limiter of <max> calls per <window> milliseconds should refuse the next call until the window passes
+
+    Examples:
+      | max | window |
+      | 1   | 1000   |
+      | 3   | 5000   |
+      | 10  | 250    |
+
+  @server @rejection
+  Scenario: A rate limiter refuses an invalid limit or window
+    Then kora_lib should refuse a rate limiter with an invalid limit or window
+
+  @server
+  Scenario: Nearest search honours radius and bucket
+    Then kora_lib should find the nearest entry to the origin as "fft-near" at 5.0
+    And kora_lib should find no entry within 4.0 of the origin
+    And kora_lib should find the nearest entry in bucket 2 as "fft-mid"
+    And kora_lib should find the nearest entry in bucket 1 as "fft-near"
+
+  @server @rejection
+  Scenario: Nearest search refuses a missing list or coordinate reader
+    Then kora_lib should refuse a nearest search without a list or coordinate reader
+
+  # Finding (offline dry run, kora_lib 0958650): fxmanifest.lua loads
+  # modules/lookup/shared.lua before modules/util/shared.lua, and lookup
+  # captures `local trim = Kora.util.trim` at load time, so every lookup
+  # given a STRING (a name, "453432689" or "0x1B06D571") raises "attempt to
+  # call a nil value (upvalue 'trim')"; only Lua number arguments work. The
+  # lookup scenarios below are expected to fail until the load order is
+  # fixed; they all pass with util loaded before lookup.
+  @server
+  Scenario Outline: The lookup catalogue resolves a weapon from <form>
+    Given the kora_lib lookup catalogue should be ready
+    Then kora_lib should look up the weapon "<value>" with hash 453432689
+
+    Examples:
+      | form                   | value         |
+      | its canonical name     | WEAPON_PISTOL |
+      | a lower-case name      | weapon_pistol |
+      | a decimal hash         | 453432689     |
+      | a hexadecimal hash     | 0x1B06D571    |
+
+  @server
+  Scenario: The lookup catalogue resolves a vehicle model and reports unknown weapons
+    Given the kora_lib lookup catalogue should be ready
+    Then kora_lib should look up the vehicle model "adder" as "adder"
+    And kora_lib should report the weapon "WEAPON_FFT_NEVER_EXISTS" as not found
+
+  @server @rejection
+  Scenario: The lookup catalogue refuses unknown namespaces and malformed hashes
+    Then kora_lib should refuse lookups with an unknown namespace or a malformed hash
+
+  @server
+  Scenario: Locales report the server languages and fall back to the key
+    Then kora_lib should report English among the server languages
+    And kora_lib should translate the unknown key "fft.kora_lib.never.a.key" to the key itself
+
+  @server @rejection
+  Scenario: Locales refuse a missing resource or key
+    Then kora_lib should refuse to translate without a resource or key
+
+  @server
+  Scenario Outline: Notification type "<value>" is normalised to "<expected>"
+    Then kora_lib should normalise the notification type "<value>" to "<expected>"
+
+    Examples:
+      | value   | expected |
+      | inform  | info     |
+      | warn    | warning  |
+      | info    | info     |
+      | success | success  |
+      | error   | error    |
+      | fft_odd | fft_odd  |
+
+  @server
+  Scenario Outline: The minigame motion wave is <expected> at <elapsed> ms and <speed> Hz
+    Then the kora_lib minigame wave at <elapsed> milliseconds and <speed> Hz should be <expected>
+
+    Examples:
+      | elapsed | speed | expected |
+      | 0       | 1.0   | 0.0      |
+      | 250     | 1.0   | 0.5      |
+      | 500     | 1.0   | 1.0      |
+      | 750     | 1.0   | 0.5      |
+      | 1000    | 1.0   | 0.0      |
+      | 125     | 2.0   | 0.5      |
+      | 1250    | 0.5   | 0.75     |
+
+  @server
+  Scenario: Controlled loops return early, give up after their tries and time out
+    Then a kora_lib controlled loop should return the first truthy value after 1 attempts
+    And a kora_lib controlled loop should return the first truthy value after 4 attempts
+    And a kora_lib controlled loop should give up after 3 tries
+    And a kora_lib controlled loop should time out after 300 milliseconds
+
+  @server @rejection
+  Scenario: Controlled loops refuse invalid limits
+    Then kora_lib should refuse a controlled loop with invalid limits
+
+  @server
+  Scenario: Waiting for an unset GlobalState key times out
+    Then waiting 200 milliseconds for the kora_lib GlobalState key "fft:kora_lib:never-set" should time out
+
+  @server @rejection
+  Scenario: Waiting for GlobalState refuses invalid arguments
+    Then kora_lib should refuse to wait for GlobalState with invalid arguments
+
+  @server
+  Scenario: Server distance checks measure from where I stand
+    Then kora_lib should place me within 2.0 of where I stand and not 25.0 away
+    And kora_lib should find a known spot beside me among far ones
+    And kora_lib should compare two coordinates within 5.0
+    And kora_lib should compare two coordinates within 4.9
+
+  @server @rejection
+  Scenario: Server distance and closest searches refuse invalid input
+    Then kora_lib should refuse server distance checks with invalid input
+    And kora_lib should refuse closest searches with an invalid source or distance
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion (client): player cache and streaming loaders.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The player cache agrees with the game on foot
+    Then the kora_lib player cache should agree with the game about me
+    And the kora_lib player cache should show me on foot
+
+  @world
+  Scenario: The player cache follows me into a vehicle
+    Given I am driving a temporary "blista"
+    Then the kora_lib player cache should show me in the driver seat of my vehicle
+
+  Scenario: Custom cache keys store values and report changes
+    Then a custom kora_lib cache key should store values and report changes
+
+  Scenario Outline: The reserved cache key <key> cannot be overwritten
+    Then setting the reserved kora_lib cache key "<key>" should be ignored
+
+    Examples:
+      | key      |
+      | ped      |
+      | playerId |
+      | vehicle  |
+      | health   |
+
+  @rejection
+  Scenario: The player cache refuses invalid keys and handlers
+    Then kora_lib should refuse cache keys that are empty or too long
+
+  Scenario: Streaming loaders return loaded assets and release after a callback
+    Then kora_lib should stream the model "adder" and the anim dict "mp_common"
+    And kora_lib should release a streamed model after its callback runs
+
+  @rejection
+  Scenario: Streaming loaders refuse unknown and malformed assets
+    Then kora_lib should refuse to stream unknown or malformed assets
+
+  # Coverage expansion (client): blips, vehicle getters, key bindings.
+  Scenario: A blip owned by fft is tracked, hidden, shown and removed
+    Then kora_lib should create, track, hide, show and remove a blip owned by fft
+
+  @rejection
+  Scenario: Blips refuse missing coordinates, options and handles
+    Then kora_lib should refuse blips without coordinates or handles
+
+  @world
+  Scenario: Vehicle getters describe the vehicle I drive
+    Given I am driving a temporary "blista"
+    Then kora_lib vehicle getters should describe the "blista" I am driving
+
+  @rejection
+  Scenario: Vehicle getters reject a ped and a missing entity
+    Then kora_lib vehicle getters should reject something that is not a vehicle
+
+  Scenario: Key bindings are listed and another resource's binding cannot be removed
+    Then kora_lib should list key bindings sorted by name and refuse to remove one fft does not own
+
+  # Coverage expansion (server): commands, suggestions, logging and QA guard.
+  @server
+  Scenario: The command registry is listed sorted by name and suggests nothing for unknown commands
+    Then kora_lib should list its registered commands sorted by name
+    And kora_lib should suggest nothing for unknown or malformed command lookups
+
+  @server
+  Scenario: Logging statistics are well formed
+    Then kora_lib logging statistics should be well formed
+
+  @server @rejection
+  Scenario: Only kora_qa may change the QA run state
+    Then kora_lib should refuse to let fft change the QA run state

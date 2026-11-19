@@ -576,3 +576,100 @@ Feature: kora_mdt terminal access and role gating
     Then the app "kora_mdt:terminal" should be open
     And the app action "charge:select" should be unavailable
     And the app action "charge:edit" should be unavailable
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: MDT callbacks sent directly, bypassing the terminal.
+  # The server must refuse them by role or validation; nothing is written.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario Outline: A civilian sending the MDT callback "<callback>" directly is refused
+    Given my job is "unemployed" at grade 0
+    Then the MDT callback "<callback>" sent directly should be refused as not authorised
+
+    Examples:
+      | callback         |
+      | dashboard        |
+      | reports          |
+      | cases            |
+      | warrants         |
+      | bolos            |
+      | charges          |
+      | manageCharges    |
+      | searchPeople     |
+      | searchVehicles   |
+      | person           |
+      | case             |
+      | closeReport      |
+      | closeWarrant     |
+      | resolveBolo      |
+      | updateCaseStatus |
+      | linkCaseReport   |
+      | addCriminal      |
+      | addMedical       |
+      | createWarrant    |
+      | createReport     |
+      | createBolo       |
+      | createCharge     |
+      | updateCharge     |
+
+  @rejection
+  Scenario Outline: An off-duty officer sending the MDT callback "<callback>" directly is refused
+    Given I am off duty as "police" at grade 1
+    Then the MDT callback "<callback>" sent directly should be refused as not authorised
+
+    Examples:
+      | callback      |
+      | dashboard     |
+      | searchPeople  |
+      | createWarrant |
+
+  @rejection
+  Scenario Outline: An on-duty medic sending the police MDT callback "<callback>" directly is refused
+    Given I am on duty as "ambulance" at grade 1
+    Then the MDT callback "<callback>" sent directly should be refused as not authorised
+
+    Examples:
+      | callback         |
+      | dashboard        |
+      | reports          |
+      | cases            |
+      | warrants         |
+      | bolos            |
+      | charges          |
+      | searchVehicles   |
+      | closeReport      |
+      | closeWarrant     |
+      | resolveBolo      |
+      | addCriminal      |
+      | createWarrant    |
+      | createReport     |
+      | createBolo       |
+
+  @rejection
+  Scenario Outline: An officer who is not a boss cannot manage charges directly (<callback>)
+    Given I am on duty as "police" at grade 1
+    Then the MDT should not let me manage charges
+    And the MDT callback "<callback>" sent directly should be refused as not authorised
+
+    Examples:
+      | callback      |
+      | manageCharges |
+      | createCharge  |
+      | updateCharge  |
+
+  @rejection
+  Scenario Outline: An officer's direct MDT callback "<callback>" with "<args>" fails validation
+    Given I am on duty as "police" at grade 1
+    Then the MDT callback "<callback>" with "<args>" should be refused as "<reason>"
+
+    Examples:
+      | callback         | args                  | reason                        |
+      | closeReport      | 0                     | invalid report                |
+      | closeWarrant     | 999999999, fft        | invalid warrant action        |
+      | resolveBolo      | fft                   | invalid BOLO                  |
+      | updateCaseStatus | 999999999, fft        | invalid case status           |
+      | linkCaseReport   | 0, 0                  | invalid case or report        |
+      | case             | 999999999             | Case not found.               |
+      | searchPeople     | z                     | enter at least two characters |
+      | searchVehicles   | z                     | enter at least two characters |

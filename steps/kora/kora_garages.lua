@@ -511,3 +511,48 @@ K.step('the garage zone should not offer {string}', 'client', function(ctx, labe
         Wait(200)
     end
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: exports.kora_garages:getOwnedVehicles (server/owned.lua:58-76).
+-- ---------------------------------------------------------------------------
+
+local OWNED_STATES = { out = true, garaged = true, impounded = true } -- server/owned.lua STATES
+
+K.step('the garage owned-vehicle list for me should be sorted and well formed', 'server', function(ctx)
+    local vehicles = K.export('kora_garages', 'getOwnedVehicles', K.player(ctx).citizenid)
+    assert(type(vehicles) == 'table', 'getOwnedVehicles did not return a list')
+    assert(#vehicles <= 200, 'getOwnedVehicles returned more than 200 rows')
+    local previous
+    for index, vehicle in ipairs(vehicles) do
+        assert(type(vehicle.plate) == 'string' and vehicle.plate ~= '', ('Vehicle %d has no plate'):format(index))
+        assert(OWNED_STATES[vehicle.state], ('Vehicle %s has the state %s'):format(vehicle.plate, tostring(vehicle.state)))
+        for _, field in ipairs({ 'fuel', 'engine', 'body' }) do
+            ctx:equal(type(vehicle[field]), 'number', ('Vehicle %s %s type'):format(vehicle.plate, field))
+        end
+        assert(type(vehicle.garageLabel) == 'string', ('Vehicle %s has no garage label'):format(vehicle.plate))
+        if previous then assert(previous <= vehicle.plate, 'getOwnedVehicles is not sorted by plate') end
+        previous = vehicle.plate
+    end
+    -- Same rows as kora_core holds for the character.
+    ctx:equal(#vehicles, math.min(#(K.export('kora_core', 'getByOwner', K.player(ctx).citizenid) or {}), 200),
+        'Owned vehicle count against kora_core')
+end)
+K.step('the garage owned-vehicle list for {string} should be empty', 'server', function(ctx, citizenid)
+    assert(citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid')
+    local vehicles = K.export('kora_garages', 'getOwnedVehicles', citizenid)
+    ctx:equal(type(vehicles) == 'table' and #vehicles, 0, 'getOwnedVehicles(' .. citizenid .. ')')
+end)
+K.step('the garage owned-vehicle list should refuse a citizen id of {int} characters', 'server', function(ctx, length)
+    local ok, err = K.export('kora_garages', 'getOwnedVehicles', ('F'):rep(length))
+    ctx:equal(ok, false, 'getOwnedVehicles result')
+    ctx:equal(err, 'Invalid citizen id.', 'getOwnedVehicles reason')
+end)
+
+-- Coverage expansion: kora_garages:houseGarages (server/server.lua:35-37).
+K.step('the house garage callback should serve the configured garages', 'client', function(ctx)
+    local ok, packed = pcall(function() return exports.kora_lib:callback_triggerPacked('kora_garages:houseGarages') end)
+    assert(ok, 'houseGarages raised: ' .. tostring(packed))
+    local garages = type(packed) == 'table' and packed[1]
+    assert(type(garages) == 'table' and next(garages) ~= nil, 'houseGarages served no garages')
+    assert(type(garages.legionsquare) == 'table', 'houseGarages does not include legionsquare')
+end)

@@ -953,3 +953,19 @@ Feature: kora_businesses bundled jobs
     When I request a residential CCTV call-out for another citizen
     Then the kora_businesses callback should refuse with "You are not authorised for that home."
     And the number of CCTV call-outs should be unchanged
+
+  # Coverage expansion: hot dog stand callbacks without a stand.
+  @rejection
+  Scenario Outline: The hot dog callback <callback> is refused without a stand and pays nothing
+    Given I remember my "bank" balance
+    And I remember my "cash" balance
+    Then the hot dog callback "<callback>" without a stand should be refused
+    And my "bank" balance should be unchanged
+    And my "cash" balance should be unchanged
+
+    Examples:
+      | callback        |
+      | stopWorking     |
+      | beginPreparing  |
+      | finishPreparing |
+      | sell            |

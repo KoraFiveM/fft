@@ -442,3 +442,127 @@ K.step('the EMS helper exports should answer without escorting anyone', 'client'
     local ok = pcall(function() return exports[RESOURCE]:PainKillerLoop() end)
     ctx:equal(ok, true, 'PainKillerLoop is a no-op and does not raise')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy hospital callbacks and the reduce-only weapon
+-- damage events (server/compat/hospital.lua:129-139, 205-226), plus the
+-- inert treat/revive events aimed at the tester.
+-- ---------------------------------------------------------------------------
+
+local function hospitalCallback(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('the legacy hospital status of me should show me alive and not bleeding', 'client', function(ctx)
+    local status, err = hospitalCallback('hospital:GetPlayerStatus')
+    assert(type(status) == 'table', 'hospital:GetPlayerStatus refused me: ' .. tostring(err))
+    ctx:equal(status.isdead, false, 'isdead')
+    ctx:equal(status.inlaststand, false, 'inlaststand')
+    ctx:equal(type(status.woundData), 'table', 'woundData type')
+    ctx:equal(hospitalCallback('hospital:GetPlayerBleeding'), false, 'hospital:GetPlayerBleeding for me')
+end)
+K.step('the legacy hospital status of player {int} should be refused as not authorised', 'client', function(ctx, target)
+    assert(target >= 60000, 'Use an id no real player has (60000 or above)')
+    local status, err = hospitalCallback('hospital:GetPlayerStatus', target)
+    ctx:equal(status, nil, 'hospital:GetPlayerStatus result')
+    ctx:equal(err, 'Not authorized.', 'hospital:GetPlayerStatus refusal')
+    local bleeding, bleedErr = hospitalCallback('hospital:GetPlayerBleeding', target)
+    ctx:equal(bleeding, nil, 'hospital:GetPlayerBleeding result')
+    ctx:equal(bleedErr, 'Not authorized.', 'hospital:GetPlayerBleeding refusal')
+end)
+K.step('the legacy hospital doctor count should match the on-duty EMS count', 'client', function(ctx)
+    local count = hospitalCallback('hospital:GetDoctors')
+    assert(type(count) == 'number' and count >= 0, 'hospital:GetDoctors returned ' .. tostring(count))
+    ctx.state.legacyDoctors = count
+end)
+
+-- SetWeaponDamage clamps the modifier into [0, 1] before echoing it to the
+-- caller's own client; RestoreWeaponDamage ignores a non-number hash.
+K.step('I listen for legacy hospital weapon damage changes', 'client', function(ctx)
+    ctx.state.weaponDamage = {}
+    RegisterNetEvent('hospital:client:SetWeaponDamage')
+    ctx:on('hospital:client:SetWeaponDamage', function(hash, modifier)
+        table.insert(ctx.state.weaponDamage, { hash = hash, modifier = modifier })
+    end)
+    RegisterNetEvent('hospital:client:RestoreWeaponDamage')
+    ctx:on('hospital:client:RestoreWeaponDamage', function(hash)
+        table.insert(ctx.state.weaponDamage, { hash = hash, restored = true })
+    end)
+end)
+K.step('asking the hospital to set weapon damage to {float} should apply at most {float}', 'client',
+    function(ctx, requested, expected)
+        local seen = assert(ctx.state.weaponDamage, 'Listen for legacy hospital weapon damage changes first')
+        local start, hash = #seen, GetHashKey('weapon_pistol')
+        TriggerServerEvent('hospital:server:SetWeaponDamage', hash, requested)
+        ctx:waitUntil(function() return #seen > start end, 'The hospital did not answer SetWeaponDamage', 3000)
+        local answer = seen[#seen]
+        ctx:equal(answer.hash, hash, 'Weapon hash')
+        assert(math.abs(answer.modifier - expected) < 1e-6,
+            ('The hospital applied %s, expected %s'):format(tostring(answer.modifier), tostring(expected)))
+    end)
+K.step('the hospital should ignore weapon damage requests without a weapon hash', 'client', function(ctx)
+    local seen = assert(ctx.state.weaponDamage, 'Listen for legacy hospital weapon damage changes first')
+    local start = #seen
+    TriggerServerEvent('hospital:server:SetWeaponDamage', 'weapon_pistol', 0.5)
+    TriggerServerEvent('hospital:server:SetWeaponDamage', GetHashKey('weapon_pistol'), 'fft')
+    TriggerServerEvent('hospital:server:RestoreWeaponDamage', 'weapon_pistol')
+    Wait(1500)
+    ctx:equal(#seen, start, 'Weapon damage answers to malformed requests')
+end)
+K.step('the hospital should restore damage for a weapon hash', 'client', function(ctx)
+    local seen = assert(ctx.state.weaponDamage, 'Listen for legacy hospital weapon damage changes first')
+    local start, hash = #seen, GetHashKey('weapon_pistol')
+    TriggerServerEvent('hospital:server:RestoreWeaponDamage', hash)
+    ctx:waitUntil(function() return #seen > start and seen[#seen].restored end, 'RestoreWeaponDamage was not answered', 3000)
+    ctx:equal(seen[#seen].hash, hash, 'Restored weapon hash')
+end)
+
+-- RevivePlayer/TreatWounds refuse the caller as their own target (:160-177)
+-- before anything is sent; the only possible answer is a client request event.
+K.step('legacy revive and treatment requests aimed at myself should do nothing', 'client', function(ctx)
+    local heard = 0
+    RegisterNetEvent('kora_ambulance:client:reviveRequested')
+    RegisterNetEvent('kora_ambulance:client:treatmentRequested')
+    ctx:on('kora_ambulance:client:reviveRequested', function() heard = heard + 1 end)
+    ctx:on('kora_ambulance:client:treatmentRequested', function() heard = heard + 1 end)
+    local me = GetPlayerServerId(PlayerId())
+    TriggerServerEvent('hospital:server:RevivePlayer', me)
+    TriggerServerEvent('hospital:server:TreatWounds', me)
+    TriggerServerEvent('hospital:server:RevivePlayer', 65000)
+    TriggerServerEvent('hospital:server:TreatWounds', 'fft')
+    Wait(1500)
+    ctx:equal(heard, 0, 'Revive or treatment requests sent back')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: native EMS callbacks sent directly
+-- (server/death.lua:505-512, duty.lua:152-155, revive.lua:93-95,
+-- treatment.lua:33-191, hospital.lua:118-175). A living player cannot report
+-- a death, a civilian cannot treat or check out a vehicle, and tokens that
+-- were never issued complete nothing.
+-- ---------------------------------------------------------------------------
+
+local EMS_CALLS = {
+    reportDeath = function() return 'fft' end,
+    spawnDutyVehicle = function() return 'fft_never_a_hospital', 1 end,
+    beginRevive = function(me) return me end,
+    assessPatient = function() return 65000 end,
+    beginTreatment = function(me) return me end,
+    completeTreatment = function() return 65000, 'fft-token', true end,
+    bedCareCompleted = function() return 'fft-token' end,
+}
+K.step('the EMS callback {string} sent directly should be refused with {string}', 'client', function(ctx, name, reason)
+    local build = assert(EMS_CALLS[name], 'Not an EMS callback in this suite: ' .. name)
+    local result, err = hospitalCallback('kora_ambulance:server:' .. name, build(GetPlayerServerId(PlayerId())))
+    assert(not result, ('kora_ambulance:server:%s accepted the request'):format(name))
+    if reason ~= '' then ctx:equal(err, reason, name .. ' refusal') end
+end)

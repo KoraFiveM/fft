@@ -820,3 +820,35 @@ end)
 K.step('ox_target targeting is enabled again', 'client', function()
     exports[OX]:disableTargeting(false)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: addTargetBone (client/state.lua:783-796), registered on
+-- the tester's temporary vehicle and removed again; refusals through the hook
+-- so the assert text survives.
+-- ---------------------------------------------------------------------------
+
+K.step('kora_target should register a bone option on my vehicle and remove it again', 'client', function(ctx)
+    local vehicle = GetVehiclePedIsIn(PlayerPedId(), false)
+    assert(vehicle ~= 0, 'I am not in a vehicle')
+    local id = K.export(TARGET, 'addTargetBone', vehicle, 'door_dside_f', { { label = 'FFT bone probe', onSelect = noop } })
+    assert(type(id) == 'number', 'addTargetBone returned no registration id')
+    ctx:cleanup(function() pcall(function() exports.kora_target:removeEntity(vehicle, id) end) end)
+    ctx:equal(K.export(TARGET, 'removeEntity', vehicle, id), true, 'removeEntity of the bone option')
+end)
+local BONE_REFUSALS = {
+    ['bone given as a number'] = { 7, { { label = 'FFT bone', onSelect = noop } }, 'bone must be a string.' },
+    ['no options'] = { 'door_dside_f', {}, 'options must be a non-empty array of target options.' },
+}
+K.step('kora_target addTargetBone with {string} should be refused', 'client', function(ctx, case)
+    local spec = assert(BONE_REFUSALS[case], 'Unknown addTargetBone refusal case: ' .. case)
+    local entity = PlayerPedId()
+    local called, ok, result = pcall(function()
+        return exports.kora_target:fftAction('call', 'addTargetBone', entity, spec[1], spec[2])
+    end)
+    if not called then error('kora_target call hook failed: ' .. tostring(ok), 0) end
+    if ok then
+        pcall(function() exports.kora_target:removeEntity(entity, result) end)
+        error('addTargetBone accepted the "' .. case .. '" case', 0)
+    end
+    assert(K.contains(tostring(result), spec[3]), ('addTargetBone refused with "%s", expected "%s"'):format(tostring(result), spec[3]))
+end)

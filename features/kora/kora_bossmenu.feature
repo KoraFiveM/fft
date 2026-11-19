@@ -668,3 +668,48 @@ Feature: kora_bossmenu management
       | kind | name       |
       | job  | unemployed |
       | gang | none       |
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: boss checks, application definitions and boss-only
+  # callbacks sent directly by a non-boss. Nothing is written.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The police chief is a job boss
+    Given my job is "police" at grade 5
+    Then the boss menu should report me as a job boss: yes
+
+  Scenario: A ballas boss is a gang boss
+    Given my gang is "ballas" at grade 3
+    Then the boss menu should report me as a gang boss: yes
+
+  Scenario: A police officer below chief is not a job boss
+    Given my job is "police" at grade 1
+    Then the boss menu should report me as a job boss: no
+
+  Scenario: The police application form lists its questions
+    Then the boss menu application for the job "police" should list its questions
+
+  @rejection
+  Scenario: An application for an unknown organisation is refused
+    Then the boss menu application for "fft_never_a_job" should be refused as an unknown organisation
+
+  @rejection
+  Scenario Outline: A police officer who is not a boss is refused <callback>
+    Given my job is "police" at grade 1
+    Then the boss menu callback "<callback>" for "police" should be refused as "You are not a boss for this organization."
+
+    Examples:
+      | callback        |
+      | acceptApplicant |
+      | editQuestion    |
+      | removeQuestion  |
+
+  @rejection
+  Scenario: Boss-only callbacks for an unknown organisation are refused
+    Given my job is "police" at grade 5
+    Then the boss menu callback "removeQuestion" for "fft_never_a_job" should be refused as "Unknown organization."
+
+  @rejection
+  Scenario: A police officer who is not a boss cannot open the boss stash
+    Given my job is "police" at grade 1
+    Then opening the boss stash should be refused as "You are not a boss for this organization."

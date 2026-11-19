@@ -302,3 +302,23 @@ K.step('the job roster app count should have changed by {int}', 'client', functi
     local count = assert(badge(type(update) == 'table' and update.navigation), 'The last roster action returned no updated view')
     ctx:equal(count, before + delta, 'Roster app job count')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: exports.kora_multijob:setDuty (server/server.lua:189-197).
+-- The job fixture (generic "I am on duty as ...") restores job and duty.
+-- ---------------------------------------------------------------------------
+
+K.step('kora_multijob sets me {word} duty through its export', 'server', function(ctx, state)
+    assert(state == 'on' or state == 'off', 'Use on or off')
+    local ok, reason = K.export('kora_multijob', 'setDuty', ctx.tester, state == 'on')
+    if not ok then error('setDuty was refused: ' .. tostring(reason), 0) end
+end)
+K.step('kora_multijob should refuse to set my duty to {string} as {string}', 'server', function(ctx, value, expected)
+    local before = K.player(ctx).job.onduty
+    local arg = value
+    if value == 'on' then arg = true elseif value == 'off' then arg = false end
+    local ok, reason = K.export('kora_multijob', 'setDuty', ctx.tester, arg)
+    ctx:equal(ok, false, 'setDuty result')
+    ctx:equal(reason, expected, 'setDuty reason')
+    ctx:equal(K.player(ctx).job.onduty, before, 'Duty after the refusal')
+end)

@@ -483,3 +483,16 @@ Feature: kora_customs public custom shops
     And I am driving a temporary "sultan"
     When I target "Repair vehicle ($750)"
     Then I should see a notification containing "This vehicle does not need a repair."
+
+  # Coverage expansion: repairFinish and factoryLook sent directly.
+  @rejection
+  Scenario: Finishing a repair that was never started is refused without a charge
+    Given I remember my "bank" balance
+    And I remember my "cash" balance
+    Then finishing a customs repair I never started should be refused
+    And my "bank" balance should be unchanged
+    And my "cash" balance should be unchanged
+
+  @rejection
+  Scenario: A factory look without vehicle properties is refused
+    Then a customs factory look without vehicle properties should be refused

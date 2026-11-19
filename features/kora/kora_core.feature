@@ -954,3 +954,92 @@ Feature: kora_core modern export API
     And the core should make random alphanumeric text of length 12
     And the core should make random letter text of length 0
     And the core should read, write and copy nested paths
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: characters, offline data, garage reads, user limits,
+  # physical cash ownership, useables and the shared registry.
+  # ---------------------------------------------------------------------------
+
+  @server
+  Scenario: My character list and ownership checks agree on my character
+    Then my core character list should include my current character
+    And the core should confirm I own my current character
+    But the core should deny that I own the character "FFT_NOT_A_CITIZEN"
+    And the core should deny that I own the character ""
+
+  @server
+  Scenario: Offline character reads return my record and nothing for unknown ids
+    Then the core offline record of my character should carry my citizen id
+    And the core should find no offline record for "FFT_OFFLINE_NEVER"
+    And the core should find no offline record for ""
+
+  @server @rejection
+  Scenario: Offline saves are refused before anything is written
+    Then the core should refuse an offline save without player data
+    And the core should refuse an offline save without fields
+    And the core should refuse an offline save of my online character
+
+  @server
+  Scenario: Garage reads list only my vehicles and know no made-up plate
+    Then every vehicle the core lists for me should be mine
+    And the core should list no vehicles for the citizen "FFT_NO_GARAGE"
+    And the core should know no vehicle with the plate "FFT NONE"
+
+  @server @rejection
+  Scenario: Tagging a vehicle that does not exist is refused
+    Then the core should refuse to tag a vehicle that does not exist
+
+  @server
+  Scenario: My user record reports a slot limit and a Discord id
+    Then my core character slot limit should be a positive number
+    And the core should report my stored Discord id as text or nothing
+
+  @server
+  Scenario Outline: The <account> account is never physical cash
+    Then the core should not treat the "<account>" account as physical cash
+
+    Examples:
+      | account        |
+      | bank           |
+      | crypto         |
+      | fft_not_money  |
+
+  @server @rejection
+  Scenario: Only the inventory provider may register or unregister physical cash
+    Then the core should report whether cash is physical as a boolean
+    And the core should refuse to let fft register physical cash
+    And the core should refuse to let fft unregister physical cash
+
+  @server
+  Scenario: Consumables, useables and the shared registry answer for unknown names
+    Then the core consumables hook should be registered while kora_inventory runs
+    And the core should know no useable item named "fft_never_an_item"
+    And the core should register nothing in the unknown shared registry "fft_never_a_registry"
+
+  @server
+  Scenario Outline: The qb-core facade describes the <job> job like the core registry
+    Then the qb-core facade should describe the job "<job>" like the core registry
+
+    Examples:
+      | job        |
+      | unemployed |
+      | police     |
+      | ambulance  |
+
+  @server
+  Scenario: The qb-core facade serves the shared tables and filtered core objects
+    Then the qb-core facade should serve the shared items, vehicles and weapons tables
+    And the qb-core facade should list the gang "none"
+    And the qb-core facade should know no shared namespace called "FftNeverANamespace"
+    And the qb-core core object filtered to "Shared, Functions" should hold only those keys
+    And the qb-core core object filtered to "Config, fft_missing" should hold only those keys
+
+  # Coverage expansion: legacy qb-multicharacter callbacks.
+  Scenario: The legacy character callbacks list my character and slot limit
+    Given my client listens for my citizen id from the core
+    And the core tells my client my citizen id and slot limit
+    Then the legacy character list should include my character and report my slot limit
+
+  @rejection
+  Scenario: Deleting a character that does not exist through the legacy callback is refused
+    Then the legacy character delete of "FFT00000ZZ9" should be refused as not found

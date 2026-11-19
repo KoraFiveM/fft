@@ -854,3 +854,48 @@ K.step('exactly one clothing purchase of {int} should have been charged to {stri
     ctx:equal(#list, 1, 'kora_clothing-purchase charges')
     ctx:equal(list[1][3], amount, 'Charged amount')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy skin callbacks (server/server.lua:710-716,
+-- 859-870, 954-970). The tester's own skin is readable; another character's
+-- is refused by the ownership check; an outfit outside a session is nil.
+-- ---------------------------------------------------------------------------
+
+local function clothingCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    return type(packed) == 'table' and packed or {}
+end
+
+K.step('my client learns my citizen id for the clothing checks', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_clothing:cid')
+    ctx:on('fft:kora_clothing:cid', function(cid) ctx.state.clothingCid = cid end)
+end)
+K.step('the server tells my client my citizen id for the clothing checks', 'server', function(ctx)
+    TriggerClientEvent('fft:kora_clothing:cid', ctx.tester, K.player(ctx).citizenid)
+end)
+K.step('the legacy skin callbacks should agree on my saved skin', 'client', function(ctx)
+    ctx:waitUntil(function() return ctx.state.clothingCid ~= nil end, 'My citizen id was not learnt', 3000)
+    local own = clothingCall('qb-clothing:server:getSkin')
+    if own[1] == nil then
+        error('The tester has no saved skin; save an appearance before running this scenario', 0)
+    end
+    ctx:equal(type(own[2]), 'table', 'qb-clothing:server:getSkin skin')
+    local preview = clothingCall('qb-multicharacter:server:getSkin', ctx.state.clothingCid)
+    ctx:equal(preview[1], own[1], 'Character preview model')
+    ctx:equal(type(preview[2]), 'table', 'Character preview skin')
+end)
+K.step('the character preview skin of {string} should be refused', 'client', function(ctx, citizenid)
+    assert(citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid')
+    ctx:equal(clothingCall('qb-multicharacter:server:getSkin', citizenid)[1], nil, 'Preview of another character')
+    ctx:equal(clothingCall('qb-multicharacter:server:getSkin', 42)[1], nil, 'Preview with a numeric citizenid')
+end)
+K.step('an outfit skin requested outside a clothing session should be nothing', 'client', function(ctx)
+    ctx:equal(clothingCall('kora_clothing:server:getOutfitSkin', 1)[1], nil, 'getOutfitSkin outside a session')
+end)

@@ -675,3 +675,18 @@ end)
 K.step('the freight board should report {int} skill points', 'client', function(ctx, points)
     ctx:equal(board(ctx).rep.skillPoints, points, 'Skill points on the freight board')
 end)
+
+-- Coverage expansion: vehicleReturned without a dispatched vehicle
+-- (server.lua:535-541) is refused for every malformed or unowned request.
+-- Paced under the callback's rate limit, so the step takes about 8 s.
+K.step('returning a freight vehicle I was never given should be refused', 'client', function(ctx)
+    local cases = { { 'truck', 1 }, { 'trailer', 1 }, { 'boat', 1 }, { 'truck', 0 }, { 'truck', 1.5 }, { 'truck', 'fft' } }
+    for index, case in ipairs(cases) do
+        local ok, packed = pcall(function()
+            return exports.kora_lib:callback_triggerPacked('kora_truckerjob:server:vehicleReturned', case[1], case[2])
+        end)
+        assert(ok, 'vehicleReturned raised: ' .. tostring(packed))
+        ctx:equal(type(packed) == 'table' and packed[1], false, ('vehicleReturned case %d'):format(index))
+        Wait(1300) -- vehicleReturned is limited to 4 calls per 5 s (server.lua:552)
+    end
+end)

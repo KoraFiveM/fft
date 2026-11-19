@@ -598,3 +598,42 @@ K.step('forcing and stopping an unknown timed job id should do nothing', 'server
     ctx:equal(K.export('kora_utils', 'ForceRunTimedJob', 999999999), nil, 'ForceRunTimedJob of an unknown id')
     ctx:equal(K.export('kora_utils', 'StopTimedJob', 999999999), nil, 'StopTimedJob of an unknown id')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: the harness callbacks and events sent directly
+-- (modules/seatbelt/server.lua). A finish without a pending action, a forged
+-- equip event and a toggle with nothing to attach are all refused, and no
+-- harness use is spent.
+-- ---------------------------------------------------------------------------
+
+local function utilsCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('the harness toggle should answer {string}', 'client', function(ctx, expected)
+    ctx:equal(utilsCall('kora_utils:server:toggleHarness'), expected, 'toggleHarness answer')
+end)
+K.step('finishing a harness I never started should be refused', 'client', function(ctx)
+    ctx:equal(utilsCall('kora_utils:server:finishHarness', { slot = 1 }, '1'), false, 'finishHarness without a pending action')
+    ctx:equal(utilsCall('kora_utils:server:finishHarness', 'fft'), false, 'finishHarness with a malformed item')
+end)
+K.step('a forged harness equip event should change nothing', 'client', function(ctx)
+    local state = {}
+    RegisterNetEvent('kora_utils:client:harnessState')
+    ctx:on('kora_utils:client:harnessState', function(on) state.on = on end)
+    TriggerServerEvent('equip:harness', { name = 'harness', slot = 1 })
+    TriggerServerEvent('kora_utils:server:removeHarness')
+    TriggerServerEvent('kora_utils:server:cancelHarness', 'fft-not-a-token')
+    TriggerServerEvent('seatbelt:DoHarnessDamage')
+    Wait(1500)
+    assert(state.on ~= true, 'The server reported a harness attached after forged events')
+end)

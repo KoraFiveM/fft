@@ -687,3 +687,62 @@ Feature: kora_ambulance hospital care, EMS duty and first-aid guards
   # reported; the helper answers a boolean and the no-op loop does not raise.
   Scenario: The EMS helper exports answer without escorting anyone
     Then the EMS helper exports should answer without escorting anyone
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: legacy hospital callbacks, reduce-only weapon damage
+  # and self-aimed revive/treatment requests.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The legacy hospital status reports a healthy tester
+    Then the legacy hospital status of me should show me alive and not bleeding
+    And the legacy hospital doctor count should match the on-duty EMS count
+
+  @rejection
+  Scenario: A player who is not EMS cannot read another player's hospital status
+    Given my job is "unemployed" at grade 0
+    Then the legacy hospital status of player 65000 should be refused as not authorised
+
+  Scenario Outline: Legacy weapon damage of <requested> is applied as <applied>
+    Given I listen for legacy hospital weapon damage changes
+    Then asking the hospital to set weapon damage to <requested> should apply at most <applied>
+
+    Examples:
+      | requested | applied |
+      | 0.5       | 0.5     |
+      | 0.0       | 0.0     |
+      | 1.0       | 1.0     |
+      | 5.0       | 1.0     |
+      | -2.0      | 0.0     |
+
+  Scenario: Legacy weapon damage is restored and malformed requests are ignored
+    Given I listen for legacy hospital weapon damage changes
+    Then the hospital should ignore weapon damage requests without a weapon hash
+    And the hospital should restore damage for a weapon hash
+
+  @rejection
+  Scenario: Legacy revive and treatment requests aimed at myself are ignored
+    Given I am on duty as "ambulance" at grade 1
+    Then legacy revive and treatment requests aimed at myself should do nothing
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: native EMS callbacks sent directly.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario: A living player cannot report their own death
+    Then the EMS callback "reportDeath" sent directly should be refused with ""
+    And the legacy hospital status of me should show me alive and not bleeding
+
+  @rejection
+  Scenario Outline: A civilian sending the EMS callback <callback> directly is refused
+    Given my job is "unemployed" at grade 0
+    Then the EMS callback "<callback>" sent directly should be refused with "<reason>"
+
+    Examples:
+      | callback          | reason                     |
+      | spawnDutyVehicle  | You must be on duty.       |
+      | beginRevive       | Invalid patient.           |
+      | assessPatient     | You must be an on-duty paramedic. |
+      | beginTreatment    | Invalid patient.           |
+      | completeTreatment | Invalid treatment action.  |
+      | bedCareCompleted  | Invalid care session.      |

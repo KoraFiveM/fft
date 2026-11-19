@@ -1378,3 +1378,239 @@ K.step('the core should read, write and copy nested paths', 'server', function(c
     ctx:equal(copy.a.list[2], 'y', 'deepClone a.list.2')
     ctx:equal(K.export(CORE, 'deepClone', 'text'), 'text', 'deepClone of text')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: characters, offline data, garage reads, user limits,
+-- physical cash ownership, useables and registry bulk calls. Every step is
+-- read only or a refusal that returns before anything is written; only the
+-- tester's own citizenid and license, or made-up FFT ids, are ever passed.
+-- ---------------------------------------------------------------------------
+
+local function myLicense(ctx)
+    local license = K.export(CORE, 'primary', ctx.tester)
+    assert(type(license) == 'string' and license ~= '', 'The tester has no primary identifier')
+    return license
+end
+
+-- Core.multichar.getCharacters / ownsCharacter (modules/multichar/server.lua).
+K.step('my core character list should include my current character', 'server', function(ctx)
+    local cid = K.player(ctx).citizenid
+    local rows = K.export(CORE, 'getCharacters', ctx.tester)
+    assert(type(rows) == 'table', 'getCharacters did not return a list')
+    local found
+    for _, row in ipairs(rows) do if row.citizenid == cid then found = row end end
+    assert(found, 'getCharacters does not list the tester citizenid ' .. tostring(cid))
+    -- getCharacters decodes charinfo, money, job and gang into tables.
+    for _, field in ipairs({ 'charinfo', 'money', 'job', 'gang' }) do
+        ctx:equal(type(found[field]), 'table', 'Decoded ' .. field)
+    end
+end)
+K.step('the core should confirm I own my current character', 'server', function(ctx)
+    ctx:equal(K.export(CORE, 'ownsCharacter', ctx.tester, K.player(ctx).citizenid), true, 'ownsCharacter(mine)')
+end)
+K.step('the core should deny that I own the character {string}', 'server', function(ctx, citizenid)
+    assert(citizenid == '' or citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid (or an empty one)')
+    ctx:equal(K.export(CORE, 'ownsCharacter', ctx.tester, citizenid), false, 'ownsCharacter(' .. citizenid .. ')')
+end)
+
+-- Core.persistence.getOfflinePlayerData / saveOfflinePlayer (modules/persistence/server.lua).
+K.step('the core offline record of my character should carry my citizen id', 'server', function(ctx)
+    local cid = K.player(ctx).citizenid
+    local data = K.export(CORE, 'getOfflinePlayerData', cid)
+    assert(type(data) == 'table', 'getOfflinePlayerData returned nothing for the tester')
+    ctx:equal(data.citizenid, cid, 'Offline record citizenid')
+end)
+K.step('the core should find no offline record for {string}', 'server', function(ctx, citizenid)
+    assert(citizenid == '' or citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid (or an empty one)')
+    local data, err = K.export(CORE, 'getOfflinePlayerData', citizenid)
+    ctx:equal(data, nil, 'getOfflinePlayerData(' .. citizenid .. ')')
+    if citizenid == '' then
+        assert(err == nil or err == 'invalid citizenid', 'getOfflinePlayerData gave the reason ' .. tostring(err))
+    end
+end)
+-- The three refusals below all return before any SQL write (:247-251).
+K.step('the core should refuse an offline save without player data', 'server', function(ctx)
+    local ok, err = K.export(CORE, 'saveOfflinePlayer', 'fft-not-a-record', { 'money' })
+    refused('an offline save without player data', ok, err, 'invalid player data')
+end)
+K.step('the core should refuse an offline save without fields', 'server', function(ctx)
+    local ok, err = K.export(CORE, 'saveOfflinePlayer', { citizenid = 'FFT_OFFLINE_NEVER' }, {})
+    refused('an offline save without fields', ok, err, 'fields are required')
+end)
+K.step('the core should refuse an offline save of my online character', 'server', function(ctx)
+    local ok, err = K.export(CORE, 'saveOfflinePlayer', { citizenid = K.player(ctx).citizenid }, { 'money' })
+    refused('an offline save of an online character', ok, err, 'player is online')
+end)
+
+-- Core.garage.getByOwner / getByPlate (modules/garage/server.lua): reads only.
+K.step('every vehicle the core lists for me should be mine', 'server', function(ctx)
+    local cid = K.player(ctx).citizenid
+    local rows = K.export(CORE, 'getByOwner', cid)
+    assert(type(rows) == 'table', 'getByOwner did not return a list')
+    for index, row in ipairs(rows) do
+        ctx:equal(row.citizenid, cid, ('Vehicle %d owner'):format(index))
+        assert(type(row.plate) == 'string' and row.plate ~= '', ('Vehicle %d has no plate'):format(index))
+        local same = K.export(CORE, 'getByPlate', row.plate)
+        ctx:equal(type(same) == 'table' and same.citizenid, cid, ('getByPlate(%s) owner'):format(row.plate))
+    end
+end)
+K.step('the core should list no vehicles for the citizen {string}', 'server', function(ctx, citizenid)
+    assert(citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid')
+    ctx:equal(#(K.export(CORE, 'getByOwner', citizenid) or {}), 0, 'getByOwner(' .. citizenid .. ')')
+end)
+K.step('the core should know no vehicle with the plate {string}', 'server', function(ctx, plate)
+    ctx:equal(K.export(CORE, 'getByPlate', plate), nil, 'getByPlate(' .. plate .. ')')
+end)
+-- tagVehicle refuses before touching any entity (:148-154).
+K.step('the core should refuse to tag a vehicle that does not exist', 'server', function(ctx)
+    ctx:equal(K.export(CORE, 'tagVehicle', 0, 1), false, 'tagVehicle(entity 0)')
+    ctx:equal(K.export(CORE, 'tagVehicle', 1, 0), false, 'tagVehicle(id 0)')
+    ctx:equal(K.export(CORE, 'tagVehicle', 1, 'fft'), false, 'tagVehicle(non-numeric id)')
+end)
+
+-- Core.users (modules/users/server.lua). The tester's users row already exists.
+K.step('my core character slot limit should be a positive number', 'server', function(ctx)
+    local limit = K.export(CORE, 'getMaxCharacters', myLicense(ctx))
+    assert(type(limit) == 'number' and limit >= 1 and limit == math.floor(limit),
+        'getMaxCharacters returned ' .. tostring(limit))
+end)
+K.step('the core should report my stored Discord id as text or nothing', 'server', function(ctx)
+    local discord = K.export(CORE, 'getDiscord', myLicense(ctx))
+    assert(discord == nil or type(discord) == 'string', 'getDiscord returned ' .. tostring(discord))
+end)
+
+-- Core.money physical cash (modules/money/server.lua:333-375): only the
+-- configured inventory provider may register or unregister, so `fft` is refused.
+K.step('the core should not treat the {string} account as physical cash', 'server', function(ctx, account)
+    ctx:equal(K.export(CORE, 'isPhysicalCash', account), false, 'isPhysicalCash(' .. account .. ')')
+end)
+K.step('the core should report whether cash is physical as a boolean', 'server', function(ctx)
+    ctx:equal(type(K.export(CORE, 'isPhysicalCash', 'cash')), 'boolean', 'isPhysicalCash(cash) type')
+end)
+K.step('the core should refuse to let fft register physical cash', 'server', function(ctx)
+    local before = K.export(CORE, 'isPhysicalCash', 'cash')
+    local ok, err = K.export(CORE, 'registerPhysicalCash', 'cash')
+    refused('registerPhysicalCash from fft', ok, err, 'only the configured inventory provider may register physical cash')
+    ctx:equal(K.export(CORE, 'isPhysicalCash', 'cash'), before, 'isPhysicalCash(cash) after the refusal')
+end)
+K.step('the core should refuse to let fft unregister physical cash', 'server', function(ctx)
+    local before = K.export(CORE, 'isPhysicalCash', 'cash')
+    local ok, err = K.export(CORE, 'unregisterPhysicalCash', 'cash')
+    refused('unregisterPhysicalCash from fft', ok, err, 'physical cash provider mismatch')
+    ctx:equal(K.export(CORE, 'isPhysicalCash', 'cash'), before, 'isPhysicalCash(cash) after the refusal')
+end)
+
+-- Core.consumables.isRegistered: true once kora_inventory accepted the usingItem hook.
+K.step('the core consumables hook should be registered while kora_inventory runs', 'server', function(ctx)
+    if GetResourceState('kora_inventory') ~= 'started' then error('kora_inventory is not started', 0) end
+    ctx:equal(K.export(CORE, 'isRegistered'), true, 'consumables isRegistered')
+end)
+
+-- Core.inventory.getUseable returns a record only for registered useables.
+K.step('the core should know no useable item named {string}', 'server', function(ctx, name)
+    ctx:equal(K.export(CORE, 'getUseable', name), nil, 'getUseable(' .. name .. ')')
+end)
+
+-- Core.registry.registerManyShared on a registry that does not exist registers nothing.
+K.step('the core should register nothing in the unknown shared registry {string}', 'server', function(ctx, name)
+    assert(name:sub(1, 4) == 'fft_', 'Use an fft_ registry name')
+    ctx:equal(K.export(CORE, 'registerManyShared', name, { { name = 'fft_one' }, { name = 'fft_two' } }), 0,
+        'registerManyShared(' .. name .. ')')
+end)
+
+-- qb-core export facade (compat/server/qb-core.lua:1394-1408), provided while
+-- Config.compat.coreObjectExport is true. 'qb-core' is an alias served by
+-- kora_core, not a started resource, so the export is called directly rather
+-- than through K.export (whose K.started check would refuse the alias).
+local function qbExport(name, ...)
+    local args = table.pack(...)
+    local results = table.pack(pcall(function() return exports['qb-core'][name](exports['qb-core'], table.unpack(args, 1, args.n)) end))
+    if not results[1] then error(("exports['qb-core']:%s failed: %s"):format(name, tostring(results[2])), 0) end
+    return table.unpack(results, 2, results.n)
+end
+
+K.step('the qb-core facade should describe the job {string} like the core registry', 'server', function(ctx, name)
+    local record = K.export(CORE, 'getShared', 'jobs', name)
+    assert(type(record) == 'table', 'kora_core has no job ' .. name)
+    local legacy = qbExport('GetShared', 'Jobs', name)
+    assert(type(legacy) == 'table', "GetShared('Jobs', " .. name .. ') returned nothing')
+    ctx:equal(legacy.label, record.label, 'Legacy job label')
+    -- Lower-case namespaces resolve through canonicalSharedNamespace.
+    local aliased = qbExport('GetShared', 'jobs', name)
+    ctx:equal(type(aliased) == 'table' and aliased.label, record.label, "GetShared('jobs') label")
+    local all = qbExport('GetSharedJobs')
+    ctx:equal(type(all) == 'table' and type(all[name]) == 'table' and all[name].label, record.label, 'GetSharedJobs label')
+end)
+K.step('the qb-core facade should list the gang {string}', 'server', function(ctx, name)
+    local gangs = qbExport('GetSharedGangs')
+    assert(type(gangs) == 'table' and type(gangs[name]) == 'table', 'GetSharedGangs does not list ' .. name)
+end)
+K.step('the qb-core facade should serve the shared items, vehicles and weapons tables', 'server', function(ctx)
+    for _, name in ipairs({ 'GetSharedItems', 'GetSharedVehicles', 'GetSharedWeapons' }) do
+        local value = qbExport(name)
+        ctx:equal(type(value), 'table', name .. ' type')
+        ctx:equal(next(value) ~= nil, true, name .. ' is not empty')
+    end
+end)
+K.step('the qb-core facade should know no shared namespace called {string}', 'server', function(ctx, namespace)
+    ctx:equal(qbExport('GetShared', namespace), nil, "GetShared('" .. namespace .. "')")
+end)
+K.step('the qb-core core object filtered to {string} should hold only those keys', 'server', function(ctx, list)
+    local wanted, seen = {}, {}
+    for key in list:gmatch('[^,%s]+') do wanted[#wanted + 1] = key end
+    local object = qbExport('GetCoreObject', wanted)
+    assert(type(object) == 'table', 'GetCoreObject did not return a table')
+    for key in pairs(object) do
+        seen[key] = true
+        local listed = false
+        for _, name in ipairs(wanted) do if name == key then listed = true end end
+        assert(listed, 'GetCoreObject returned the unrequested key ' .. tostring(key))
+    end
+    for _, key in ipairs(wanted) do
+        if key:sub(1, 4) ~= 'fft_' then assert(seen[key], 'GetCoreObject is missing ' .. key) end
+    end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy qb-multicharacter callbacks
+-- (compat/server/qb-multicharacter.lua). Reads for the tester's own license,
+-- and a delete of a citizenid that does not exist (refused at _load, :61).
+-- ---------------------------------------------------------------------------
+
+local function coreCallback(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    return type(packed) == 'table' and packed or {}
+end
+
+K.step('my client listens for my citizen id from the core', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_core:cid')
+    ctx:on('fft:kora_core:cid', function(cid, slots) ctx.state.coreCid, ctx.state.coreSlots = cid, slots end)
+end)
+K.step('the core tells my client my citizen id and slot limit', 'server', function(ctx)
+    local license = K.export(CORE, 'primary', ctx.tester)
+    TriggerClientEvent('fft:kora_core:cid', ctx.tester, K.player(ctx).citizenid, K.export(CORE, 'getMaxCharacters', license))
+end)
+K.step('the legacy character list should include my character and report my slot limit', 'client', function(ctx)
+    ctx:waitUntil(function() return ctx.state.coreCid ~= nil end, 'My citizen id was not learnt', 3000)
+    local rows = coreCallback('qb-multicharacter:server:GetUserCharacters')[1]
+    assert(type(rows) == 'table', 'GetUserCharacters returned no list')
+    local found = false
+    for _, row in ipairs(rows) do if row.citizenid == ctx.state.coreCid then found = true end end
+    assert(found, 'GetUserCharacters does not list my character')
+    ctx:equal(coreCallback('qb-multicharacter:server:GetNumberOfCharacters')[1], ctx.state.coreSlots, 'GetNumberOfCharacters')
+    local setup = coreCallback('qb-multicharacter:server:setupCharacters')[1]
+    ctx:equal(type(setup) == 'table' and #setup, #rows, 'setupCharacters count')
+end)
+K.step('the legacy character delete of {string} should be refused as not found', 'client', function(ctx, citizenid)
+    assert(citizenid:sub(1, 3) == 'FFT', 'Use a made-up FFT citizenid')
+    local packed = coreCallback('qb-multicharacter:server:deleteCharacter', citizenid)
+    ctx:equal(packed[1], false, 'deleteCharacter result')
+    ctx:equal(packed[2], 'character not found', 'deleteCharacter refusal')
+end)

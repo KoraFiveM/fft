@@ -918,3 +918,243 @@ K.step('a trusted craft check of {int} {string} into {int} {string} should be re
     local ok = trustedCheck(ctx, ingredient, amount, output, outAmount)
     ctx:equal(ok, false, 'CanCraftItems accepted the check')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: persistence status, weapon state reads, carried and
+-- equipped weapons, and refusals of the provider-only exchange, stash
+-- recovery and legacy police-trash bridges. Reads only; every refusal
+-- returns before any lock or SQL write.
+-- ---------------------------------------------------------------------------
+
+local function slotOf(ctx, item)
+    for slot, entry in pairs(K.player(ctx).items or {}) do
+        if type(entry) == 'table' and entry.name == item then return tonumber(slot) or slot end
+    end
+end
+
+-- getPersistenceStatus (server.lua:3924-3934).
+K.step('the kora_inventory persistence status should be consistent', 'server', function(ctx)
+    local status = K.export(INV, 'getPersistenceStatus')
+    assert(type(status) == 'table', 'getPersistenceStatus did not return a table')
+    ctx:equal(type(status.enabled), 'boolean', 'status.enabled type')
+    ctx:equal(type(status.schemaReady), 'boolean', 'status.schemaReady type')
+    ctx:equal(type(status.ready), 'boolean', 'status.ready type')
+    if status.ready then
+        ctx:equal(status.enabled and status.schemaReady, true, 'ready implies enabled and schemaReady')
+        ctx:equal(status.restoring, false, 'A ready inventory is not restoring')
+    end
+    if not status.enabled then ctx:equal(status.ready, false, 'Disabled persistence is never ready') end
+end)
+
+-- GetWeaponState(src, slot) (server/crafting.lua:768-775): a copy of a
+-- weapon's metadata, nil for anything that is not a weapon.
+K.step('kora_inventory should report weapon state for my {string}', 'server', function(ctx, item)
+    local slot = ctx:waitUntil(function() return slotOf(ctx, item) end, 'I hold no ' .. item, 3000)
+    local state = K.export(INV, 'GetWeaponState', ctx.tester, slot)
+    ctx:equal(type(state), 'table', ('GetWeaponState for %s in slot %s'):format(item, tostring(slot)))
+end)
+K.step('kora_inventory should report no weapon state for my {string}', 'server', function(ctx, item)
+    local slot = ctx:waitUntil(function() return slotOf(ctx, item) end, 'I hold no ' .. item, 3000)
+    ctx:equal(K.export(INV, 'GetWeaponState', ctx.tester, slot), nil, 'GetWeaponState for ' .. item)
+end)
+K.step('kora_inventory should report no weapon state for an empty or invalid slot', 'server', function(ctx)
+    ctx:equal(K.export(INV, 'GetWeaponState', ctx.tester, 'fft'), nil, 'GetWeaponState with a non-numeric slot')
+    ctx:equal(K.export(INV, 'GetWeaponState', ctx.tester, 999), nil, 'GetWeaponState for slot 999')
+end)
+
+-- GetCarriedWeapons / GetEquippedWeapon (server/weaponcarry.lua:564-581).
+K.step('kora_inventory should list only weapons as carried on my body', 'server', function(ctx)
+    local carried = K.export(INV, 'GetCarriedWeapons', ctx.tester)
+    assert(type(carried) == 'table', 'GetCarriedWeapons did not return a list')
+    for index, entry in ipairs(carried) do
+        assert(type(entry) == 'table' and type(entry.name) == 'string', ('Carried entry %d has no name'):format(index))
+    end
+    ctx:equal(#(K.export(INV, 'GetCarriedWeapons', 0) or {}), 0, 'GetCarriedWeapons for player 0')
+end)
+K.step('kora_inventory should report my equipped weapon as nothing or a held slot', 'server', function(ctx)
+    local held = K.export(INV, 'GetEquippedWeapon', ctx.tester)
+    if held ~= nil then
+        assert(type(held) == 'table' and type(held.name) == 'string' and held.slot ~= nil,
+            'GetEquippedWeapon returned a malformed record')
+    end
+end)
+
+-- Provider-only bridges: fft is never an exchange caller, stash policy owner
+-- or kora_sql, so each refuses before any work (exchange.lua:208-225,
+-- recovery.lua:45-51, server.lua:3939-3943).
+K.step('kora_inventory should refuse a player exchange from fft', 'server', function(ctx)
+    local result, code = K.export(INV, 'ExecutePlayerExchange', ctx.tester, 'fft-exchange', { give = {} })
+    ctx:equal(result, nil, 'ExecutePlayerExchange result')
+    assert(code == nil or code == 'rejected', 'ExecutePlayerExchange code ' .. tostring(code))
+    local status, statusCode = K.export(INV, 'GetPlayerExchange', 'fft-exchange')
+    ctx:equal(status, nil, 'GetPlayerExchange result')
+    assert(statusCode == nil or statusCode == 'rejected', 'GetPlayerExchange code ' .. tostring(statusCode))
+end)
+K.step('kora_inventory should refuse a stash recovery claim with invalid arguments', 'server', function(ctx)
+    local ok, err = K.export(INV, 'ClaimStash', ctx.tester, 42, 'fft-operation')
+    refused('a stash claim with a numeric id', ok, err, 'Invalid recovery request.')
+    ok, err = K.export(INV, 'claimStash', ctx.tester, 'fft_stash', '')
+    refused('a stash claim with an empty operation key', ok, err, 'Invalid recovery request.')
+end)
+K.step('kora_inventory should refuse a stash recovery claim for a stash fft does not own', 'server', function(ctx)
+    local ok, err = K.export(INV, 'ClaimStash', ctx.tester, 'fft_never_a_stash', 'fft-operation')
+    assert(not ok, 'kora_inventory accepted a recovery claim for a stash fft does not own')
+    assert(err == 'Recovery is unavailable.' or err == 'Inventory persistence is unavailable.',
+        'ClaimStash was refused with ' .. tostring(err))
+end)
+K.step('kora_inventory should refuse the legacy police trash bridge to anyone but kora_sql', 'server', function(ctx)
+    local answered, result, reason = false, nil, nil
+    K.export(INV, 'deleteLegacyPoliceTrash', function(value, why) answered, result, reason = true, value, why end)
+    ctx:waitUntil(function() return answered end, 'deleteLegacyPoliceTrash never answered', 3000)
+    ctx:equal(result, nil, 'deleteLegacyPoliceTrash result')
+    ctx:equal(reason, 'legacy inventory SQL bridge is restricted to kora_sql', 'deleteLegacyPoliceTrash reason')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy qb-inventory / qb-weapons callbacks and events
+-- sent the way a stock client would (server/compat/qb_callbacks.lua,
+-- qb_events.lua, qb_weapons.lua). None may mint, move, repair or reload
+-- anything: each is refused, answered with a safe constant, or may only lower
+-- a value. Asserted against the authoritative inventory on the server.
+-- ---------------------------------------------------------------------------
+
+local function legacyInvCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    return type(packed) == 'table' and packed or {}
+end
+
+K.step('the retired qb-weapons callbacks should answer safely', 'client', function(ctx)
+    local config = legacyInvCall('qb-weapons:server:GetConfig')[1]
+    ctx:equal(type(config), 'table', 'GetConfig type')
+    ctx:equal(next(config), nil, 'GetConfig is empty')
+    ctx:equal(legacyInvCall('qb-weapons:server:RepairWeapon', 1)[1], false, 'RepairWeapon')
+    ctx:equal(legacyInvCall('qb-weapons:server:RemoveAttachment', { slot = 1 }, 'clip_attachment')[1], false, 'RemoveAttachment')
+end)
+K.step('the legacy weapon ammo callback should report no weapon in slot {int}', 'client', function(ctx, slot)
+    ctx:equal(legacyInvCall('weapon:server:GetWeaponAmmo', slot)[1], 0, 'GetWeaponAmmo of a non-weapon slot')
+end)
+
+-- Server realm: find the tester's slot for an item, remember its weapon state.
+K.step('I remember the weapon state of my {string}', 'server', function(ctx, item)
+    local slot = ctx:waitUntil(function() return slotOf(ctx, item) end, 'I hold no ' .. item, 3000)
+    local state = K.export(INV, 'GetWeaponState', ctx.tester, slot) or {}
+    ctx.state.weaponSlot = slot
+    ctx.state.weaponBefore = { ammo = state.ammo, quality = state.quality, durability = state.durability }
+    TriggerClientEvent('fft:kora_inventory:weaponSlot', ctx.tester, slot)
+end)
+K.step('the weapon state of my {string} should be unchanged', 'server', function(ctx, item)
+    local before = assert(ctx.state.weaponBefore, 'Remember the weapon state first')
+    Wait(500)
+    local state = K.export(INV, 'GetWeaponState', ctx.tester, ctx.state.weaponSlot) or {}
+    ctx:equal(state.ammo, before.ammo, item .. ' ammo')
+    ctx:equal(state.quality, before.quality, item .. ' quality')
+    ctx:equal(state.durability, before.durability, item .. ' durability')
+end)
+K.step('my client listens for my weapon slot', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_inventory:weaponSlot')
+    ctx:on('fft:kora_inventory:weaponSlot', function(slot) ctx.state.weaponSlot = slot end)
+end)
+K.step('a stock client tries to refill, repair and reclaim my weapon', 'client', function(ctx)
+    ctx:waitUntil(function() return ctx.state.weaponSlot ~= nil end, 'My weapon slot was not learnt', 3000)
+    local slot = ctx.state.weaponSlot
+    TriggerServerEvent('qb-weapons:server:UpdateWeaponAmmo', { slot = slot }, 9999)
+    TriggerServerEvent('qb-weapons:server:SetWeaponQuality', { slot = slot }, 100)
+    TriggerServerEvent('qb-weapons:server:TakeBackWeapon', { slot = slot })
+    TriggerServerEvent('qb-weapons:server:UpdateWeaponQuality', { slot = slot }, -50)
+    Wait(500)
+end)
+K.step('a stock client without an open inventory tries to drop, give and move items', 'client', function(ctx)
+    local me = GetPlayerServerId(PlayerId())
+    ctx:equal(legacyInvCall('qb-inventory:server:createDrop', { fromSlot = 1, amount = 1 })[1], false, 'createDrop without a session')
+    ctx:equal(legacyInvCall('qb-inventory:server:giveItem', me, 'water_bottle', 1, 1)[1], false, 'giveItem without a session')
+    TriggerServerEvent('qb-inventory:server:SetInventoryData', 'player', 'drop-fft', 1, 1, 1, 1)
+    Wait(500)
+end)
+K.step('forged legacy purchases should be refused', 'client', function(ctx)
+    local cases = {
+        { shop = 'fft_never_a_shop', item = { slot = 1, name = 'water_bottle' }, amount = 1 },
+        { shop = 'fft_never_a_shop', item = { slot = 1 }, amount = 0 },
+        { shop = 'fft_never_a_shop', item = { slot = 'fft' }, amount = 1 },
+        { shop = {}, item = { slot = 1 }, amount = 1 },
+        'fft-not-a-table',
+    }
+    for index, data in ipairs(cases) do
+        ctx:equal(legacyInvCall('qb-inventory:server:attemptPurchase', data)[1], false, ('attemptPurchase case %d'):format(index))
+    end
+end)
+K.step('the legacy drop list should be readable', 'client', function(ctx)
+    ctx:equal(type(legacyInvCall('qb-inventory:server:GetCurrentDrops')[1]), 'table', 'GetCurrentDrops')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: server weapon-state exports on the tester's own weapon
+-- (server/crafting.lua:375-855). The weapon is granted by the scenario and
+-- removed in its cleanup, so nothing outlives the run.
+-- ---------------------------------------------------------------------------
+
+local function weaponSlot(ctx, item)
+    return ctx:waitUntil(function() return slotOf(ctx, item) end, 'I hold no ' .. item, 3000)
+end
+local function weaponState(ctx, slot) return K.export(INV, 'GetWeaponState', ctx.tester, slot) or {} end
+
+K.step('setting the ammo of my {string} to {int} should store {int}', 'server', function(ctx, item, ammo, expected)
+    local slot = weaponSlot(ctx, item)
+    local ok, err = K.export(INV, 'SetWeaponAmmo', ctx.tester, slot, ammo)
+    assert(ok, 'SetWeaponAmmo refused: ' .. tostring(err))
+    ctx:equal(weaponState(ctx, slot).ammo, expected, item .. ' ammo')
+end)
+K.step('setting the durability of my {string} to {float} should store {float}', 'server', function(ctx, item, value, expected)
+    local slot = weaponSlot(ctx, item)
+    local ok, err = K.export(INV, 'SetWeaponState', ctx.tester, slot, { durability = value })
+    assert(ok, 'SetWeaponState refused: ' .. tostring(err))
+    local stored = weaponState(ctx, slot).durability
+    assert(type(stored) == 'number' and math.abs(stored - expected) < 1e-6,
+        ('%s durability is %s, expected %s'):format(item, tostring(stored), tostring(expected)))
+end)
+K.step('wearing my {string} by {float} should leave {float} durability', 'server', function(ctx, item, amount, expected)
+    local slot = weaponSlot(ctx, item)
+    local ok, err = K.export(INV, 'ConsumeWeaponDurability', ctx.tester, slot, amount)
+    assert(ok, 'ConsumeWeaponDurability refused: ' .. tostring(err))
+    local stored = weaponState(ctx, slot).durability
+    assert(type(stored) == 'number' and math.abs(stored - expected) < 1e-6,
+        ('%s durability is %s, expected %s'):format(item, tostring(stored), tostring(expected)))
+end)
+K.step('the weapon state exports should refuse bad input for my {string}', 'server', function(ctx, item)
+    local slot = weaponSlot(ctx, item)
+    local function refusedWith(expected, ok, err)
+        ctx:equal(ok, false, 'Weapon export result')
+        ctx:equal(err, expected, 'Weapon export refusal')
+    end
+    refusedWith('invalid weapon state', K.export(INV, 'SetWeaponState', ctx.tester, slot, 'fft'))
+    refusedWith('invalid weapon durability', K.export(INV, 'SetWeaponState', ctx.tester, slot, { durability = 'fft' }))
+    refusedWith('invalid weapon ammo', K.export(INV, 'SetWeaponState', ctx.tester, slot, { ammo = 'fft' }))
+    refusedWith('invalid durability amount', K.export(INV, 'ConsumeWeaponDurability', ctx.tester, slot, 0))
+    refusedWith('invalid weapon slot', K.export(INV, 'SetWeaponAmmo', ctx.tester, 0, 5))
+    refusedWith('invalid ammunition amount', K.export(INV, 'LoadWeaponRounds', ctx.tester, slot, 'AMMO_PISTOL', 0))
+    refusedWith('ammunition does not fit this weapon', K.export(INV, 'LoadWeaponRounds', ctx.tester, slot, 'AMMO_FFT_NEVER', 5))
+end)
+K.step('the weapon state exports should refuse a slot that holds {string}', 'server', function(ctx, item)
+    local slot = weaponSlot(ctx, item)
+    local ok, err = K.export(INV, 'SetWeaponAmmo', ctx.tester, slot, 5)
+    ctx:equal(ok, false, 'SetWeaponAmmo on ' .. item)
+    ctx:equal(err, 'weapon not found', 'SetWeaponAmmo refusal')
+end)
+K.step('preparing weapon metadata for {string} should clamp durability {float} and ammo {int}', 'server',
+    function(ctx, item, durability, ammo)
+        local info, err = K.export(INV, 'PrepareWeaponMetadata', item, { durability = durability, ammo = ammo })
+        assert(type(info) == 'table', 'PrepareWeaponMetadata refused: ' .. tostring(err))
+        assert(info.durability >= 0 and info.durability <= 100, 'Durability was not clamped: ' .. tostring(info.durability))
+        ctx:equal(info.quality, info.durability, 'quality mirrors durability')
+    end)
+K.step('preparing weapon metadata for {string} should be refused as not a weapon', 'server', function(ctx, item)
+    local info, err = K.export(INV, 'PrepareWeaponMetadata', item, {})
+    ctx:equal(info, nil, 'PrepareWeaponMetadata result')
+    assert(err == nil or err == 'item is not a registered weapon', 'PrepareWeaponMetadata gave ' .. tostring(err))
+end)

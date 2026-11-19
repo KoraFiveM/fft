@@ -927,3 +927,17 @@ Feature: kora_clothing shops, wardrobe and fitting room
     And I should be wearing exactly what the fitting started with
     When I cancel the fitting
     Then the fitting room should close
+
+  # Coverage expansion: legacy skin callbacks and their ownership check.
+  Scenario: The legacy skin and character preview callbacks agree on my skin
+    Given my client learns my citizen id for the clothing checks
+    And the server tells my client my citizen id for the clothing checks
+    Then the legacy skin callbacks should agree on my saved skin
+
+  @rejection
+  Scenario: Another character's preview skin is refused
+    Then the character preview skin of "FFT00000ZZ9" should be refused
+
+  @rejection
+  Scenario: An outfit skin outside a clothing session is nothing
+    Then an outfit skin requested outside a clothing session should be nothing

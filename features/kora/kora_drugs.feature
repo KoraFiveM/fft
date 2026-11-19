@@ -229,3 +229,29 @@ Feature: kora_drugs published production data, dealer roster and rejection paths
   @server
   Scenario: The qb-drugs dealer export serves the same roster
     Then the qb-drugs dealer export should serve the same roster
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: legacy meth-cook callbacks and the corner-sale event
+  # sent directly, away from the lab and with nothing in progress. None of
+  # them reaches the cooldown that drops a player.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario Outline: The meth cook callback <callback> is refused outside a cook
+    Then the meth cook callback "<callback>" should be refused with "<reason>"
+
+    Examples:
+      | callback                  | reason                                |
+      | qb-drugs:server:startCook | You are too far from the heat source. |
+      | qb-drugs:server:runDials  | No active cooking session.            |
+      | qb-drugs:server:smash     | No active cooking session.            |
+
+  @rejection
+  Scenario: Claiming meth or a corner sale without cooking or selling gives nothing
+    Given I carry nothing the corner seller would buy
+    And I remember how many "meth" I have
+    And I remember my "cash" balance
+    When a stock client claims finished meth and a sale without having cooked or sold
+    Then I should have 0 more "meth" than before
+    And my "cash" balance should be unchanged
+    And the corner seller should find nothing I could sell

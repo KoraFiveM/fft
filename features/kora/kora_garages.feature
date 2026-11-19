@@ -529,3 +529,21 @@ Feature: kora_garages parking, job garages and the impound lot
   Scenario: A configured garage cannot be unregistered by another resource
     Then unregistering the property garage "legionsquare" should be refused with "Garage is not owned by this resource."
     And the garage directory should list "legionsquare" as the public garage "Legion Square Parking"
+
+  # Coverage expansion: the getOwnedVehicles export.
+  @server
+  Scenario: The owned-vehicle export lists my vehicles sorted by plate
+    Then the garage owned-vehicle list for me should be sorted and well formed
+    And the garage owned-vehicle list for "FFT_NO_VEHICLES" should be empty
+
+  @server @rejection
+  Scenario Outline: The owned-vehicle export refuses a citizen id of <length> characters
+    Then the garage owned-vehicle list should refuse a citizen id of <length> characters
+
+    Examples:
+      | length |
+      | 0      |
+      | 51     |
+
+  Scenario: The house garage callback serves the configured garages
+    Then the house garage callback should serve the configured garages

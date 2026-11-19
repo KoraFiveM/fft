@@ -657,3 +657,16 @@ Feature: kora_phone-stevie without a handset
   @ui @rejection
   Scenario: Bootstrap requests are rate limited
     Then repeated phone bootstrap requests should end in a rate limit
+
+  # Coverage expansion: app SDK and system mail exports.
+  @server
+  Scenario: The app SDK lists my installed apps
+    Then the phone app SDK should list my installed apps
+
+  @server @rejection
+  Scenario: The app SDK refuses a resource acting for an app it does not own
+    Then the phone app SDK should refuse fft acting for an app it does not own
+
+  @server @rejection
+  Scenario: System mail and activity refuse malformed input before storing anything
+    Then the phone system mail should refuse malformed mail and activity

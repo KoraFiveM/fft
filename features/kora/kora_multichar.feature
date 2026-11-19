@@ -315,3 +315,7 @@ Feature: kora_multichar character select guards
       | kora_core |
       | kora_lib  |
       | kora_theme |
+
+  # Coverage expansion: selection scenes.
+  Scenario: The selection scenes are served
+    Then the character selection scenes should be served as a list

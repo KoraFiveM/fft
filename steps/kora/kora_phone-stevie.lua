@@ -631,3 +631,30 @@ end)
 K.step('removing an unknown blip from the phone map should be refused', 'client', function(ctx)
     ctx:equal(K.export(RESOURCE, 'UnregisterMapBlip', 0), false, 'UnregisterMapBlip result')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: app SDK and system mail exports (server/sdk/exports.lua,
+-- server/sdk/callbacks.lua:57-62, server/mail/system.lua:62-106). fft owns no
+-- phone app and every mail call here is refused by validation before Repo.insert.
+-- ---------------------------------------------------------------------------
+
+K.step('the phone app SDK should list my installed apps', 'server', function(ctx)
+    local apps = K.export(RESOURCE, 'GetInstalledApps', ctx.tester)
+    ctx:equal(type(apps), 'table', 'GetInstalledApps for me')
+    local none = K.export(RESOURCE, 'GetInstalledApps', 0)
+    ctx:equal(type(none) == 'table' and #none, 0, 'GetInstalledApps for player 0')
+end)
+K.step('the phone app SDK should refuse fft acting for an app it does not own', 'server', function(ctx)
+    ctx:equal(K.export(RESOURCE, 'SendAppEvent', ctx.tester, 'fft_never_an_app', 'fft', {}), false, 'SendAppEvent for an unknown app')
+    ctx:equal(K.export(RESOURCE, 'SendAppEvent', 0, 'fft_never_an_app', 'fft', {}), false, 'SendAppEvent to player 0')
+    local ok, err = K.export(RESOURCE, 'RegisterAppCallback', 'fft_never_an_app', 'fft', function() end)
+    ctx:equal(ok, false, 'RegisterAppCallback for an unknown app')
+    ctx:equal(err, 'NOT_FOUND: app is not registered', 'RegisterAppCallback refusal')
+end)
+K.step('the phone system mail should refuse malformed mail and activity', 'server', function(ctx)
+    local cid = K.player(ctx).citizenid
+    ctx:equal(K.export(RESOURCE, 'SendSystemMail', '', { subject = 'fft', body = 'fft' }), false, 'SendSystemMail without a citizen id')
+    ctx:equal(K.export(RESOURCE, 'SendSystemMail', cid, 'fft-not-a-mail'), false, 'SendSystemMail with a malformed mail')
+    ctx:equal(K.export(RESOURCE, 'AddSystemActivity', cid, '', 'fft'), false, 'AddSystemActivity without a title')
+    ctx:equal(K.export(RESOURCE, 'AddSystemActivity', 42, 'fft', 'fft'), false, 'AddSystemActivity with a numeric citizen id')
+end)

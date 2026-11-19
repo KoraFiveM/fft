@@ -263,3 +263,17 @@ K.step('the server should have recorded a use of {string}', 'server', function(c
         end
     end, 'kora_inventory did not record a use of ' .. item, 5000)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: qb-newsjob:server:spawnVehicle sent directly
+-- (server/main.lua:3-9). Wrong job, unknown garage or index, and distance are
+-- refused before anything spawns.
+-- ---------------------------------------------------------------------------
+
+K.step('a direct news vehicle spawn at {string} slot {int} should be refused', 'client', function(ctx, location, index)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked('qb-newsjob:server:spawnVehicle', location, index)
+    end)
+    assert(ok, 'spawnVehicle raised: ' .. tostring(packed))
+    ctx:equal(type(packed) == 'table' and packed[1], false, 'spawnVehicle result')
+end)

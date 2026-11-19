@@ -335,3 +335,27 @@ Feature: kora_dealership public showroom browsing and purchase
       | management:resolveOffer          |
       | sales:open                       |
       | sales:confirm                    |
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: the admin dealership creator callbacks, judged by the
+  # tester's admin ACE. Nothing is created, saved or deleted.
+  # ---------------------------------------------------------------------------
+
+  Scenario: The dealership creator lists and opens dealerships for admins only
+    Given my client listens for my dealership admin permission
+    And the server tells my client whether I am a dealership admin
+    Then the dealership creator should list "pdm" to admins only
+    And the dealership creator should open "pdm" to admins only
+
+  @rejection
+  Scenario Outline: The dealership creator callback "<callback>" refuses bad input
+    Given my client listens for my dealership admin permission
+    And the server tells my client whether I am a dealership admin
+    Then the dealership creator callback "<callback>" should refuse bad input with "<reason>"
+
+    Examples:
+      | callback | reason              |
+      | get      | Unknown dealership. |
+      | delete   | Unknown dealership. |
+      | save     | Unknown dealership. |
+      | create   | A name is required. |

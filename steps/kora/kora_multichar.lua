@@ -349,3 +349,11 @@ K.step('the character select resource should depend on {string}', 'server', func
     end
     error('kora_multichar does not depend on ' .. name, 0)
 end)
+
+-- Coverage expansion: kora_multichar:server:getScenes (server.lua:100-102).
+K.step('the character selection scenes should be served as a list', 'client', function(ctx)
+    local ok, packed = pcall(function() return exports.kora_lib:callback_triggerPacked('kora_multichar:server:getScenes') end)
+    assert(ok, 'getScenes raised: ' .. tostring(packed))
+    local scenes = type(packed) == 'table' and packed[1]
+    ctx:equal(type(scenes), 'table', 'getScenes result')
+end)

@@ -438,3 +438,70 @@ K.step('no test drive should have started', 'client', function()
     Wait(1000)
     assert(not IsPedInAnyVehicle(PlayerPedId(), false), 'The tester was put in a vehicle')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: the admin dealership creator callbacks
+-- (server/creator.lua:17-81), judged by the tester's admin ACE so the
+-- scenarios never fail on a precondition. Reads are asserted for admins; for
+-- everyone the write callbacks are sent only with input they refuse before
+-- touching the database (unknown id, empty name).
+-- ---------------------------------------------------------------------------
+
+local ADMIN_REQUIRED = 'Admin permission required.' -- locales/en.lua s.errors.admin_required
+local UNKNOWN_DEALERSHIP = 'Unknown dealership.'      -- s.errors.unknown_dealership
+
+-- fn.isAdmin (server/functions.lua:86-89): Config.adminPermission ('admin' as
+-- shipped) or kora_core.admin. A server that renames the ACE must update this.
+K.step('the server tells my client whether I am a dealership admin', 'server', function(ctx)
+    local function ace(object)
+        local allowed = IsPlayerAceAllowed(ctx.tester, object)
+        return allowed == true or allowed == 1
+    end
+    TriggerClientEvent('fft:kora_dealership:admin', ctx.tester, ace('admin') or ace('kora_core.admin'))
+end)
+K.step('my client listens for my dealership admin permission', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_dealership:admin')
+    ctx:on('fft:kora_dealership:admin', function(allowed) ctx.state.dealerAdmin = allowed == true end)
+end)
+local function dealerAdmin(ctx)
+    ctx:waitUntil(function() return ctx.state.dealerAdmin ~= nil end, 'The dealership admin permission was not learnt', 3000)
+    return ctx.state.dealerAdmin
+end
+
+K.step('the dealership creator should list {string} to admins only', 'client', function(ctx, id)
+    local packed = mustCall('kora_dealership:list')
+    if not dealerAdmin(ctx) then
+        ctx:equal(packed[1], false, 'list result')
+        ctx:equal(packed[2], ADMIN_REQUIRED, 'list refusal')
+        return
+    end
+    assert(type(packed[1]) == 'table', 'list refused an admin: ' .. tostring(packed[2]))
+    local found
+    for _, row in ipairs(packed[1]) do if row.id == id then found = row end end
+    assert(found, 'The creator list does not include ' .. id)
+end)
+K.step('the dealership creator should open {string} to admins only', 'client', function(ctx, id)
+    local packed = mustCall('kora_dealership:get', id)
+    if not dealerAdmin(ctx) then
+        ctx:equal(packed[2], ADMIN_REQUIRED, 'get refusal')
+        return
+    end
+    assert(type(packed[1]) == 'table', 'get refused an admin: ' .. tostring(packed[2]))
+    ctx:equal(type(packed[1].placements), 'table', 'Dealership placements')
+end)
+local creatorCalls = {
+    get = function() return 'fft_no_such_dealer' end,
+    delete = function() return 'fft_no_such_dealer' end,
+    save = function() return 42, {} end,
+    create = function() return '   ' end,
+}
+K.step('the dealership creator callback {string} should refuse bad input with {string}', 'client',
+    function(ctx, name, expected)
+        local build = assert(creatorCalls[name], 'Unknown creator callback: ' .. name)
+        local packed = mustCall('kora_dealership:' .. name, build())
+        ctx:equal(packed[1], false, name .. ' result')
+        -- fn.withDealerWrite refuses a non-string id before the admin check
+        -- (server/functions.lua:16-17), so "save" with id 42 refuses everyone alike.
+        local beforeAdmin = name == 'save'
+        ctx:equal(packed[2], (beforeAdmin or dealerAdmin(ctx)) and expected or ADMIN_REQUIRED, name .. ' refusal')
+    end)

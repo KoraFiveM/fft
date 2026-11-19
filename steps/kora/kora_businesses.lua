@@ -954,3 +954,28 @@ K.step('I request a residential CCTV call-out for another citizen', 'client', fu
         issue = 'camera', customerType = 'residential', citizenid = 'FFT00000',
     }))
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: hot dog stand callbacks sent directly by a player who
+-- has no stand (jobs/hotdog/server.lua:57-110). None may refund a deposit,
+-- grant stock or pay for a sale.
+-- ---------------------------------------------------------------------------
+
+K.step('the hot dog callback {string} without a stand should be refused', 'client', function(ctx, name)
+    local args = {
+        stopWorking = {}, beginPreparing = {},
+        finishPreparing = { 'fft-proof', 'fft-authorization' },
+        sell = { 0, 'common', 1 },
+    }
+    local list = assert(args[name], 'Not a hot dog callback in this suite: ' .. name)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked('qb-hotdogjob:' .. name, table.unpack(list))
+    end)
+    assert(ok, name .. ' raised: ' .. tostring(packed))
+    packed = type(packed) == 'table' and packed or {}
+    assert(not packed[1], ('qb-hotdogjob:%s accepted a player with no stand'):format(name))
+    if name ~= 'finishPreparing' then
+        ctx:equal(packed[2], 'Your hot dog stand was nowhere to be seen, You will not receive your deposit back!',
+            'qb-hotdogjob:' .. name .. ' refusal')
+    end
+end)

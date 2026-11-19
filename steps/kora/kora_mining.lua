@@ -411,3 +411,97 @@ K.step('the mining creator should have refused to open', 'client', function(ctx)
     local app = K.uiState().app
     assert(not (app and app.id == 'kora_mining:creator'), 'The mining creator opened')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: the mining creator's pickaxe-shop callbacks and the
+-- mine-profile refusals (server/pickaxe_shop.lua:227-300, server/main.lua:259-292).
+-- Steps adapt to the tester's raw `command` ACE (MiningUtil.isAdmin): an admin
+-- gets the read and the validation refusals, anyone else the admin refusal.
+-- Every call refuses before saveShop() runs, so nothing is written.
+-- ---------------------------------------------------------------------------
+
+local ADMIN_REQUIRED = 'Admin permission required.' -- locales/en.lua Error.admin_permission_required
+
+local function miningCallback(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+-- The ACE is read on the server and sent to the tester's own fft client, which
+-- listens first ("my client listens ..." runs before "I note ...").
+K.step('my client listens for my mining creator permission', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_mining:admin')
+    ctx:on('fft:kora_mining:admin', function(allowed) ctx.state.miningAdmin = allowed == true end)
+end)
+K.step('the server tells my client whether I may use the mining creator', 'server', function(ctx)
+    TriggerClientEvent('fft:kora_mining:admin', ctx.tester, commandAce(ctx))
+end)
+local function miningAdmin(ctx)
+    local value = ctx.state.miningAdmin
+    assert(value ~= nil, 'The mining creator permission was not learnt')
+    return value
+end
+
+K.step('the mining creator should serve the pickaxe shop settings to admins only', 'client', function(ctx)
+    ctx:waitUntil(function() return ctx.state.miningAdmin ~= nil end, 'The mining creator permission was not learnt', 3000)
+    local result, err = miningCallback('kora_mining:pickaxeShop:creator:get')
+    if miningAdmin(ctx) then
+        assert(type(result) == 'table', 'creator:get refused an admin: ' .. tostring(err))
+        assert(type(result.model) == 'string' and result.model ~= '', 'creator:get has no vendor model')
+        ctx:equal(type(result.prices), 'table', 'creator:get prices')
+    else
+        ctx:equal(result, false, 'creator:get result')
+        ctx:equal(err, ADMIN_REQUIRED, 'creator:get refusal')
+    end
+end)
+K.step('the mining creator should refuse the pickaxe price {string} for {string} as {string}', 'client',
+    function(ctx, price, item, reason)
+        ctx:waitUntil(function() return ctx.state.miningAdmin ~= nil end, 'The mining creator permission was not learnt', 3000)
+        local result, err = miningCallback('kora_mining:pickaxeShop:creator:price', item, price)
+        ctx:equal(result, false, 'creator:price result')
+        ctx:equal(err, miningAdmin(ctx) and reason or ADMIN_REQUIRED, 'creator:price refusal')
+    end)
+K.step('the mining creator should refuse to save the vendor model {string} as {string}', 'client',
+    function(ctx, model, reason)
+        ctx:waitUntil(function() return ctx.state.miningAdmin ~= nil end, 'The mining creator permission was not learnt', 3000)
+        local result, err = miningCallback('kora_mining:pickaxeShop:creator:save', model, {})
+        ctx:equal(result, false, 'creator:save result')
+        ctx:equal(err, miningAdmin(ctx) and reason or ADMIN_REQUIRED, 'creator:save refusal')
+    end)
+K.step('the mining creator should refuse to save {int} vendor locations', 'client', function(ctx, count)
+    ctx:waitUntil(function() return ctx.state.miningAdmin ~= nil end, 'The mining creator permission was not learnt', 3000)
+    local locations = {}
+    for index = 1, count do locations[index] = { x = 0.0 + index, y = 0.0, z = 0.0, w = 0.0 } end
+    local result, err = miningCallback('kora_mining:pickaxeShop:creator:save', 's_m_m_dockwork_01', locations)
+    ctx:equal(result, false, 'creator:save result')
+    ctx:equal(err, miningAdmin(ctx) and 'Provide up to 100 pickaxe vendor locations.' or ADMIN_REQUIRED,
+        'creator:save refusal')
+end)
+K.step('the mining profile for rock {string} spot {int} should be refused as unavailable', 'client', function(ctx, rock, spot)
+    local profile, err = miningCallback('kora_mining:mineProfile', rock, spot)
+    ctx:equal(profile, false, 'mineProfile result')
+    ctx:equal(err, 'This rock is unavailable.', 'mineProfile refusal')
+end)
+K.step('the mining profile should ignore a malformed spot', 'client', function(ctx)
+    local profile = miningCallback('kora_mining:mineProfile', 'fft_rock', 'fft-not-a-spot')
+    ctx:equal(profile, nil, 'mineProfile result for a malformed spot')
+    profile = miningCallback('kora_mining:mineProfile', 'fft_rock', 1.5)
+    ctx:equal(profile, nil, 'mineProfile result for a fractional spot')
+end)
+
+-- Coverage expansion: smelting finish without a started smelt
+-- (server/smelting.lua:505-513) is refused before any item or XP is given.
+K.step('finishing a smelt I never started should be refused', 'client', function(ctx)
+    TriggerServerEvent('kora_mining:smelting:cancel')
+    local result, err = miningCallback('kora_mining:smelting:finish')
+    ctx:equal(result, false, 'smelting:finish result')
+    ctx:equal(err, 'Smelting could not be completed.', 'smelting:finish refusal')
+end)

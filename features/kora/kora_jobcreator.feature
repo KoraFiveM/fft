@@ -395,3 +395,36 @@ Feature: kora_jobcreator businesses
     Then the app "kora_jobcreator:management" should be open
     When I trigger the app action "businesses:select" on "burgershot"
     Then toggling the business console world debug twice should switch it and switch it back
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: refusals of the admin, management, till and payment
+  # callbacks for made-up ids. Nothing is saved, logged, alerted or billed.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario: Business management callbacks refuse an unknown business
+    Then the business callbacks should refuse the unknown business "fft_never_a_business"
+
+  @rejection
+  Scenario: Till callbacks refuse an unknown till
+    Then the till callbacks should refuse the unknown till "fft_never_a_till"
+
+  @rejection
+  Scenario: A player without a business job cannot request a payment
+    Given my job is "unemployed" at grade 0
+    Then requesting a business payment from player 65000 should be refused as "You are not working for a business."
+
+  @rejection
+  Scenario Outline: A Burger Shot employee cannot bill <who>
+    Given I am on duty as "burgershot" at grade 1
+    Then requesting a business payment from player <target> should be refused as "<reason>"
+
+    Examples:
+      | who                  | target | reason                    |
+      | nobody               | 0      | Pick someone else.        |
+      | a player not online  | 65000  | That player is not around. |
+
+  @rejection
+  Scenario: A Burger Shot employee cannot bill themselves
+    Given I am on duty as "burgershot" at grade 1
+    Then requesting a business payment from myself should be refused as "Pick someone else."

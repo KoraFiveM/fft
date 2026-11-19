@@ -688,3 +688,14 @@ K.step('the voice export isRadioActive should be {word}', 'client', function(ctx
     K.started(RESOURCE)
     ctx:equal(exports.kora_voice:isRadioActive(), truth(expected), 'isRadioActive')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: call mute exports (client/exports.lua:115-128).
+-- ---------------------------------------------------------------------------
+
+K.step('muting a phone call should be refused when I am not in a call', 'client', function(ctx)
+    local ok, reason = K.export('kora_voice', 'setCallMuted', true)
+    ctx:equal(ok, false, 'setCallMuted result')
+    ctx:equal(reason, 'not_in_call', 'setCallMuted reason')
+    ctx:equal(K.export('kora_voice', 'isCallMuted'), false, 'isCallMuted after the refusal')
+end)

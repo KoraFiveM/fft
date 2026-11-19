@@ -1055,3 +1055,82 @@ K.step('the toggle of the chosen door should name the {string} key', 'server', f
         end
     end, 'No kora_doorlock:stateChanged from the tester naming the key ' .. item, 5000)
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: door management callbacks sent directly
+-- (server/main.lua:281-650), judged by the tester's door admin permission
+-- (isAdmin: kora_lib hasPermission(src, 'admin', 'kora_core') with the shipped
+-- Config.AdminPermission). Every call names a made-up fft_ door or category,
+-- so each is refused before any SQL write or state broadcast.
+-- ---------------------------------------------------------------------------
+
+local NO_MANAGE = 'You do not have permission to manage door locks.'
+local NO_DELETE = 'You do not have permission to delete door locks.'
+
+local function doorCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked('kora_doorlock:server:' .. name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('kora_doorlock:server:%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('kora_doorlock:server:%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('my client listens for my door admin permission', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_doorlock:admin')
+    ctx:on('fft:kora_doorlock:admin', function(allowed) ctx.state.doorAdmin = allowed == true end)
+end)
+K.step('the server tells my client whether I am a door admin', 'server', function(ctx)
+    local allowed = K.export('kora_lib', 'permissions_hasPermission', ctx.tester, 'admin', 'kora_core') == true
+    TriggerClientEvent('fft:kora_doorlock:admin', ctx.tester, allowed)
+end)
+local function doorAdmin(ctx)
+    ctx:waitUntil(function() return ctx.state.doorAdmin ~= nil end, 'The door admin permission was not learnt', 3000)
+    return ctx.state.doorAdmin
+end
+
+K.step('the door management snapshot should be served to door admins only', 'client', function(ctx)
+    local snapshot, err = doorCall('managementSnapshotRequested')
+    if doorAdmin(ctx) then
+        assert(type(snapshot) == 'table', 'The snapshot refused a door admin: ' .. tostring(err))
+        for index, door in ipairs(snapshot) do
+            assert(type(door.id) == 'string', ('Door %d has no id'):format(index))
+            ctx:equal(type(door.locked), 'boolean', ('Door %s locked type'):format(door.id))
+        end
+    else
+        ctx:equal(snapshot, nil, 'Snapshot result')
+        ctx:equal(err, NO_MANAGE, 'Snapshot refusal')
+    end
+end)
+
+-- name -> { args, admin refusal, non-admin refusal or nil when the input
+-- check runs before the permission check }
+local DOOR_REFUSALS = {
+    managementStateSet = { { 'fft_never_a_door', true }, 'That door is no longer configured.', NO_MANAGE },
+    managementDoorDeleted = { { 'fft_never_a_door' }, 'That door is not configured.', NO_DELETE },
+    managementDoorsLinked = { { 'fft_never_a_door', 'fft_never_another' }, 'Choose two different configured doors.', NO_MANAGE },
+    managementCategoryRenamed = { { 'fft_never_a_category', 'FFT' }, 'That category no longer exists.', NO_MANAGE },
+    managementCategoryDefaultsSaved = { { 'fft_never_a_category', {} }, 'That category no longer exists.', NO_MANAGE },
+    managementCategoryDeleted = { { 'fft_never_a_category' }, 'That category no longer exists.', NO_MANAGE },
+    managementCategoryDoorCreated = { { 'fft_never_a_category', {} }, 'That category no longer exists.', NO_MANAGE },
+    managementDoorSaved = { { '-bad id!', {}, false }, 'Door ID must use letters, numbers, dashes, or underscores.' },
+    managementDoorCreated = { { 'fft-not-a-table' }, 'Door definition must be a table.' },
+}
+K.step('the door management callback {string} should refuse a made-up target', 'client', function(ctx, name)
+    local case = assert(DOOR_REFUSALS[name], 'Not a door management callback in this suite: ' .. name)
+    local result, err = doorCall(name, table.unpack(case[1]))
+    ctx:equal(result, nil, name .. ' result')
+    local expected = (case[3] == nil or doorAdmin(ctx)) and case[2] or case[3]
+    ctx:equal(err, expected, name .. ' refusal')
+end)
+
+-- Coverage expansion: exports.kora_doorlock:getDoorIdFromEntity (client/main.lua:173-179).
+K.step('kora_doorlock should know no door for my ped or entity 0', 'client', function(ctx)
+    ctx:equal(K.export('kora_doorlock', 'getDoorIdFromEntity', PlayerPedId()), nil, 'getDoorIdFromEntity(my ped)')
+    ctx:equal(K.export('kora_doorlock', 'getDoorIdFromEntity', 0), nil, 'getDoorIdFromEntity(0)')
+    ctx:equal(K.export('kora_doorlock', 'getDoorIdFromEntity', 'fft'), nil, 'getDoorIdFromEntity(text)')
+end)

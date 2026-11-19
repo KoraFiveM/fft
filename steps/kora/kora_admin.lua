@@ -762,3 +762,128 @@ K.step('the Discord settings should publish only an enabled flag and public iden
     table.sort(keys)
     ctx:equal(table.concat(keys, ','), 'applicationId,enabled,publicKey', 'published keys')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: admin menu data callbacks (server/menu_data.lua).
+-- Each answers its data at or above its role and `nil, "permission denied"`
+-- below it (allowed(), :4-9). All are reads; menuReports/menuReport are left
+-- out because listing them records delivery and read receipts.
+-- ---------------------------------------------------------------------------
+
+local MENU_DENIED = 'permission denied' -- locales/en.lua error.permission_denied_3
+local ADMIN_RANK = RANKS.admin
+
+-- kora_lib callback_triggerPacked keeps a leading nil, so `nil, reason` arrives intact.
+local function menuData(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+local function gated(ctx, name, needed, ...)
+    local result, err = menuData(name, ...)
+    if rank(ctx) >= needed then
+        assert(result ~= nil, ('%s refused a %s: %s'):format(name, ctx.state.adminLevel, tostring(err)))
+        return result
+    end
+    ctx:equal(result, nil, name .. ' result below its role')
+    ctx:equal(err, MENU_DENIED, name .. ' refusal')
+end
+
+K.step('the admin menu player list should include me for support staff only', 'client', function(ctx)
+    local players = gated(ctx, 'kora_admin:menuPlayers', SUPPORT_RANK)
+    if not players then return end
+    local me, previous = tostring(GetPlayerServerId(PlayerId())), nil
+    local found = false
+    for _, row in ipairs(players) do
+        if row.id == me then found = true end
+        if previous then assert(tonumber(previous) < tonumber(row.id), 'menuPlayers is not sorted by id') end
+        previous = row.id
+    end
+    assert(found, 'menuPlayers does not list my server id ' .. me)
+end)
+K.step('the admin menu profile of me should match my character for support staff only', 'client', function(ctx)
+    local profile = gated(ctx, 'kora_admin:menuPlayerProfile', SUPPORT_RANK, 'me')
+    if not profile then return end
+    ctx:equal(profile.id, tostring(GetPlayerServerId(PlayerId())), 'Profile id')
+    assert(type(profile.citizenid) == 'string' and profile.citizenid ~= 'Unknown', 'Profile has no citizenid')
+end)
+K.step('the admin menu profile of player {int} should be refused as {string}', 'client', function(ctx, id, reason)
+    assert(id >= 60000, 'Use an id no real player has (60000 or above)')
+    local profile, err = menuData('kora_admin:menuPlayerProfile', tostring(id))
+    ctx:equal(profile, nil, 'Profile of an unknown player')
+    ctx:equal(err, rank(ctx) >= SUPPORT_RANK and reason or MENU_DENIED, 'Profile refusal')
+end)
+K.step('the admin menu role list should include the job {string} for admins only', 'client', function(ctx, name)
+    local roles = gated(ctx, 'kora_admin:menuRoles', ADMIN_RANK)
+    if not roles then return end
+    assert(type(roles.jobs) == 'table' and type(roles.gangs) == 'table', 'menuRoles did not return jobs and gangs')
+    local found
+    for _, job in ipairs(roles.jobs) do if job.name == name then found = job end end
+    assert(found, 'menuRoles does not list the job ' .. name)
+    assert(type(found.grades) == 'table' and #found.grades >= 1, 'The job ' .. name .. ' has no grades')
+end)
+K.step('the admin menu resource list should show kora_admin started for admins only', 'client', function(ctx)
+    local rows = gated(ctx, 'kora_admin:menuResources', ADMIN_RANK)
+    if not rows then return end
+    local found
+    for _, row in ipairs(rows) do if row.name == 'kora_admin' then found = row end end
+    assert(found, 'menuResources does not list kora_admin')
+    ctx:equal(found.state, 'started', 'kora_admin state')
+end)
+K.step('the admin menu audit log should answer a page for admins only', 'client', function(ctx)
+    local rows = gated(ctx, 'kora_admin:menuAuditLog', ADMIN_RANK, { page = 1, action = 'fft_never_an_action' })
+    if not rows then return end
+    ctx:equal(type(rows), 'table', 'menuAuditLog rows')
+    ctx:equal(#rows, 0, 'Audit rows for an action no one performs')
+end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: configuration editor reads (server/config_editor.lua),
+-- judged by kora_admin's own canEditConfig oracle, and the player report-chat
+-- callbacks for a report that does not exist (server/menu_data.lua:289-320).
+-- ---------------------------------------------------------------------------
+
+K.step('my client listens for my configuration editor access', 'client', function(ctx)
+    RegisterNetEvent('fft:kora_admin:configEditor')
+    ctx:on('fft:kora_admin:configEditor', function(allowed) ctx.state.configEditor = allowed == true end)
+end)
+K.step('the server tells my client whether I may edit configuration', 'server', function(ctx)
+    TriggerClientEvent('fft:kora_admin:configEditor', ctx.tester, K.export('kora_admin', 'canEditConfig', ctx.tester) == true)
+end)
+local function configEditor(ctx)
+    ctx:waitUntil(function() return ctx.state.configEditor ~= nil end, 'Configuration editor access was not learnt', 3000)
+    return ctx.state.configEditor
+end
+K.step('the configuration catalogue should be served to configuration editors only', 'client', function(ctx)
+    local catalog, err = menuData('kora_admin:configCatalog')
+    if configEditor(ctx) then
+        assert(type(catalog) == 'table', 'configCatalog refused an editor: ' .. tostring(err))
+    else
+        ctx:equal(catalog, nil, 'configCatalog result')
+        ctx:equal(err, 'permission denied', 'configCatalog refusal')
+    end
+end)
+K.step('reading the configuration of a non-text resource should be refused', 'client', function(ctx)
+    local entry, err = menuData('kora_admin:configRead', 42)
+    ctx:equal(entry, nil, 'configRead result')
+    ctx:equal(err, configEditor(ctx) and 'invalid resource' or 'permission denied', 'configRead refusal')
+end)
+K.step('my report {int} should not be found', 'client', function(ctx, id)
+    assert(id >= 900000000, 'Use a report id no one has')
+    local report, err = menuData('kora_admin:myReport', id)
+    ctx:equal(report, nil, 'myReport result')
+    assert(err == 'report not found' or err == 'report chat is disabled', 'myReport was refused with ' .. tostring(err))
+end)
+K.step('sending a non-text message to report {int} should be refused', 'client', function(ctx, id)
+    local result, err = menuData('kora_admin:reportChatSend', id, 42)
+    ctx:equal(result, nil, 'reportChatSend result')
+    assert(err == 'message required' or err == 'report chat is disabled', 'reportChatSend was refused with ' .. tostring(err))
+end)

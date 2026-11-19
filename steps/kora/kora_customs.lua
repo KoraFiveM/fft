@@ -234,3 +234,35 @@ K.step('the repair progress bar should last {int} milliseconds', 'client', funct
     local progress = ctx:waitUntil(function() return K.uiState().progress end, 'No progress bar is running')
     ctx:equal(progress.duration, duration, 'Repair progress duration')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: repairFinish and factoryLook sent directly
+-- (server/main.lua:164-180, 253-260). A finish without a started repair and
+-- a factory look without properties are refused before any charge or write.
+-- ---------------------------------------------------------------------------
+
+local function customsCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked(name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('finishing a customs repair I never started should be refused', 'client', function(ctx)
+    local ok, err = customsCall('kora_customs:repairFinish')
+    ctx:equal(ok, false, 'repairFinish result')
+    ctx:equal(err, 'start the repair again', 'repairFinish refusal')
+end)
+K.step('a customs factory look without vehicle properties should be refused', 'client', function(ctx)
+    local ok, err = customsCall('kora_customs:factoryLook', 'fft_never_a_shop', 0, 'fft-not-properties')
+    ctx:equal(ok, false, 'factoryLook result')
+    -- The setting check comes first (:166): a server with factory looks off refuses that way.
+    assert(err == 'invalid vehicle properties' or err == 'factory look is not stored',
+        'factoryLook was refused with ' .. tostring(err))
+end)

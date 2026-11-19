@@ -489,3 +489,44 @@ K.step('the saved emote file should be unchanged', 'server', function(ctx)
     Wait(1000)
     ctx:equal(LoadResourceFile('kora_emotemenu', 'shared/created.json') or '', before, 'shared/created.json')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: shared-emote and emote-creator server events sent
+-- directly (server/main.lua:14-95, server/emote_creator.lua:97-179).
+-- ---------------------------------------------------------------------------
+
+K.step('I ask the emote server to share {string} with myself', 'client', function(_, emote)
+    TriggerServerEvent('kora_emotemenu:server:sync', GetPlayerServerId(PlayerId()), emote)
+end)
+K.step('I ask the emote server to share {string} with player {int}', 'client', function(_, emote, target)
+    assert(target >= 60000, 'Use an id no real player has (60000 or above)')
+    TriggerServerEvent('kora_emotemenu:server:sync', target, emote)
+end)
+K.step('I ask the emote server to delete the saved emote {string}', 'client', function(_, name)
+    TriggerServerEvent('kora_emotemenu:server:deleteCreatedEmote', name)
+end)
+K.step('I should see an emote notification containing {string} or {string}', 'client', function(ctx, first, second)
+    ctx:waitUntil(function()
+        for _, note in ipairs(K.ui('notifications', 0) or {}) do
+            local text = tostring(note.message or '') .. ' ' .. tostring(note.title or '')
+            if K.contains(text, first) or K.contains(text, second) then return true end
+        end
+    end, ('No notification containing "%s" or "%s"'):format(first, second), 5000)
+end)
+K.step('cancelling or answering a shared emote I was never offered should change nothing', 'client', function(ctx)
+    local heard = 0
+    RegisterNetEvent('kora_emotemenu:client:cancelSynced')
+    ctx:on('kora_emotemenu:client:cancelSynced', function() heard = heard + 1 end)
+    TriggerServerEvent('kora_emotemenu:server:cancelSync')
+    TriggerServerEvent('kora_emotemenu:server:respondSync', 999999, true)
+    Wait(1000)
+    ctx:equal(heard, 0, 'Cancel notices sent back')
+end)
+K.step('the emote server should send me the created emotes when asked', 'client', function(ctx)
+    local received
+    RegisterNetEvent('kora_emotemenu:client:addEmotes')
+    ctx:on('kora_emotemenu:client:addEmotes', function(list) received = list end)
+    TriggerServerEvent('kora_emotemenu:server:requestCreated')
+    ctx:waitUntil(function() return received ~= nil end, 'The created emotes were not sent', 5000)
+    ctx:equal(type(received), 'table', 'Created emotes')
+end)

@@ -410,3 +410,21 @@ Feature: kora_utils small player utilities
     Given I schedule a timed job "legacy" through qb-smallresources that is not due soon
     When I force the timed job "legacy" to run
     Then the timed job "legacy" should have run 1 times
+
+  # Coverage expansion: harness callbacks and events sent directly.
+  @rejection
+  Scenario: The harness toggle refuses a player on foot
+    Then the harness toggle should answer "novehicle"
+
+  @rejection @world
+  Scenario: The harness toggle refuses a driver without a harness
+    Given I should have no "harness"
+    And I am driving a temporary "blista"
+    Then the harness toggle should answer "noitem"
+
+  @rejection
+  Scenario: Forged harness finishes and events change nothing
+    Given I remember how many "harness" I have
+    Then finishing a harness I never started should be refused
+    And a forged harness equip event should change nothing
+    And I should have 0 more "harness" than before

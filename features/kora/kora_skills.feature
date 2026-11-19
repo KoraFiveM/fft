@@ -267,3 +267,7 @@ Feature: kora_skills progression
   Scenario: The client level check refuses level zero like the server
     Then the client level check for "mining" against "0" should be "false"
     And I should not count as level 0 in the skill "mining"
+
+  # Coverage expansion: the getAll callback.
+  Scenario: The skills callback returns my skills
+    Then the skills callback should return my skills as a table

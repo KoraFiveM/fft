@@ -716,3 +716,8 @@ Feature: kora_voice radio, call and proximity authority
     When I request the voice radio channel 948
     Then my voice radio request should be granted
     And the voice export isRadioActive should be false
+
+  # Coverage expansion: call mute exports outside a call.
+  @rejection
+  Scenario: A call cannot be muted outside a call
+    Then muting a phone call should be refused when I am not in a call

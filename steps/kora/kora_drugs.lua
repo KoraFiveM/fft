@@ -432,3 +432,35 @@ K.step('the qb-drugs dealer export should serve the same roster', 'server', func
     for name in pairs(compat) do assert(roster[name], 'qb-drugs roster has an extra dealer ' .. tostring(name)) end
 end)
 
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: legacy meth-cook callbacks and the corner-sale event
+-- sent directly (server/Meth.lua:41-126, server/Cornerselling.lua:90-110).
+-- None of these reaches onCooldown: startCook is refused by distance before
+-- craft(), and the rest refuse without a cooking session or a sale in progress.
+-- ---------------------------------------------------------------------------
+
+local function drugsCall(name)
+    local ok, packed = pcall(function() return exports.kora_lib:callback_triggerPacked(name) end)
+    assert(ok, name .. ' raised: ' .. tostring(packed))
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('the meth cook callback {string} should be refused with {string}', 'client', function(ctx, name, reason)
+    local allowed = { ['qb-drugs:server:startCook'] = true, ['qb-drugs:server:runDials'] = true, ['qb-drugs:server:smash'] = true }
+    assert(allowed[name], 'Not a meth cook callback in this suite: ' .. name)
+    local ok, err = drugsCall(name)
+    ctx:equal(ok, false, name .. ' result')
+    ctx:equal(err, reason, name .. ' refusal')
+end)
+K.step('a stock client claims finished meth and a sale without having cooked or sold', 'client', function()
+    TriggerServerEvent('qb-drugs:server:getMeth')
+    TriggerServerEvent('kora_drugs:sellToBuyer', 0)
+    TriggerServerEvent('kora_drugs:sellToBuyer', 999999)
+    TriggerServerEvent('qb-drugs:server:explosion')
+    Wait(1000)
+end)
+K.step('the corner seller should find nothing I could sell', 'client', function(ctx)
+    ctx:equal(drugsCall('kora_drugs:getSellableItem'), false, 'getSellableItem')
+end)

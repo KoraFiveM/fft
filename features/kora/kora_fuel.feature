@@ -508,3 +508,18 @@ Feature: kora_fuel paid refuelling and EV charging
       | 176.631   | -1562.026 | 29.263  |
       | -319.292  | -1471.715 | 30.549  |
       | 1784.324  | 3330.550  | 41.253  |
+
+  # Coverage expansion: forged fuel purchases are refused without a charge.
+  @rejection
+  Scenario Outline: A forged fuel purchase with <case> is refused
+    Given I remember my "cash" balance
+    Then a forged fuel purchase with "<case>" should be refused with "<reason>"
+    And my "cash" balance should be unchanged
+
+    Examples:
+      | case                     | reason |
+      | an unknown account       | Invalid payment account.  |
+      | a fractional amount      | Invalid service request.  |
+      | a full tank              | Vehicle is already full.  |
+      | a zero amount            | Invalid fill amount.      |
+      | more than the tank holds | Invalid fill amount.      |

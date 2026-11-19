@@ -630,3 +630,104 @@ Feature: kora_police duty, station access, citations and impound lot
 
   Scenario: The legacy and upstream handcuff exports always agree
     Then the handcuff exports should agree
+
+  # ---------------------------------------------------------------------------
+  # Coverage expansion: legacy qb-policejob server events sent the way a stock
+  # client would. Only the tester or an id no player has is ever the target;
+  # every event is refused before it acts.
+  # ---------------------------------------------------------------------------
+
+  @rejection
+  Scenario Outline: A player who is not police is refused the legacy event <event>
+    Given my job is "unemployed" at grade 0
+    And I remember my "cash" balance
+    And I listen for legacy police notifications
+    When the legacy police event "<event>" at myself should be refused with "You must be an on-duty police officer to do that."
+    Then my "cash" balance should be unchanged
+    And I should not be handcuffed according to kora_police
+
+    Examples:
+      | event                             |
+      | police:server:CuffPlayer          |
+      | police:server:SearchPlayer        |
+      | police:server:SeizeCash           |
+      | police:server:SeizeDriverLicense  |
+      | police:server:EscortPlayer        |
+      | police:server:PutPlayerInVehicle  |
+      | police:server:SetPlayerOutVehicle |
+      | police:server:BillPlayer          |
+      | police:server:JailPlayer          |
+
+  @rejection
+  Scenario Outline: An officer's legacy event <event> aimed at themselves is refused
+    Given I am on duty as "police" at grade 1
+    And I remember my "cash" balance
+    And I listen for legacy police notifications
+    When the legacy police event "<event>" at myself should be refused with "<reason>"
+    Then my "cash" balance should be unchanged
+    And I should not be handcuffed according to kora_police
+
+    Examples:
+      | event                                | reason                     |
+      | police:server:CuffPlayer             | You cannot cuff yourself.  |
+      | police:server:SearchPlayer           | target is not restrained   |
+      | police:server:SeizeCash              | target is not restrained   |
+      | police:server:SeizeDriverLicense     | target is not restrained   |
+      | police:server:EscortPlayer           | target is not cuffed       |
+      | police:server:DeEscort               | The target is not being escorted. |
+      | police:server:PutPlayerInVehicle     | target is not cuffed       |
+      | police:server:SetPlayerOutVehicle    | target is not cuffed       |
+      | police:server:KidnapPlayer           | You cannot drag yourself.  |
+      | police:server:BillPlayer:badAmount   | Invalid fine amount.       |
+
+  @rejection
+  Scenario Outline: An officer's legacy event <event> at a player who is not online is refused
+    Given I am on duty as "police" at grade 1
+    And I listen for legacy police notifications
+    Then the legacy police event "<event>" at player 65000 should be refused with "That player could not be found."
+
+    Examples:
+      | event                    |
+      | police:server:BillPlayer |
+      | police:server:JailPlayer |
+      | police:server:CuffPlayer |
+
+  @rejection
+  Scenario Outline: A player who is not police is refused the native event <event>
+    Given my job is "unemployed" at grade 0
+    And I listen for legacy police notifications
+    Then the legacy police event "<event>" at myself should be refused with "You must be an on-duty police officer to do that."
+
+    Examples:
+      | event                         |
+      | kora_police:server:jailPlayer |
+      | kora_police:server:setTracker |
+
+  @rejection
+  Scenario: A player who is not police cannot take someone out of a vehicle
+    Given my job is "unemployed" at grade 0
+    When I send the native police event "kora_police:server:takeOutVehicle" at myself
+    Then I should see a notification containing "You must be an on-duty police officer to do that."
+
+  @rejection
+  Scenario: Releasing an unknown plate from the impound is refused without a charge
+    Given I remember my "bank" balance
+    And I remember my "cash" balance
+    When I ask the police impound to release the plate "FFT NONE"
+    Then I should see a notification containing "unknown vehicle"
+    And my "bank" balance should be unchanged
+    And my "cash" balance should be unchanged
+
+  @rejection
+  Scenario Outline: Forged evidence collection gives <job> nothing
+    Given my job is "<job>" at grade <grade>
+    And I remember how many "filled_evidence_bag" I have
+    And I remember how many "empty_evidence_bag" I have
+    When a stock client tries to collect and clear evidence that does not exist
+    Then I should have 0 more "filled_evidence_bag" than before
+    And I should have 0 fewer "empty_evidence_bag" than before
+
+    Examples:
+      | job        | grade |
+      | unemployed | 0     |
+      | police     | 1     |

@@ -538,3 +538,59 @@ K.step('no job application form should open', 'client', function()
     Wait(2500)
     assert(not K.uiState().input, 'A job application form opened')
 end)
+
+-- ---------------------------------------------------------------------------
+-- Coverage expansion: boss checks, application definitions and management
+-- callbacks sent directly by someone who is not a boss (server/main.lua:29-34,
+-- 154-260, 293-298). Refusals return from requireBoss before any write.
+-- ---------------------------------------------------------------------------
+
+local function bossCall(name, ...)
+    local args = table.pack(...)
+    local ok, packed = pcall(function()
+        return exports.kora_lib:callback_triggerPacked('kora_bossmenu:server:' .. name, table.unpack(args, 1, args.n))
+    end)
+    if not ok then error(('kora_bossmenu:server:%s raised: %s'):format(name, tostring(packed)), 0) end
+    if type(packed) == 'table' and packed.__kora_lib_rejected then
+        error(('kora_bossmenu:server:%s raised: %s'):format(name, tostring(packed.error)), 0)
+    end
+    packed = type(packed) == 'table' and packed or {}
+    return packed[1], packed[2]
+end
+
+K.step('the boss menu should report me as a job boss: {word}', 'client', function(ctx, answer)
+    assert(answer == 'yes' or answer == 'no', 'Use yes or no')
+    ctx:equal(bossCall('isJobBoss'), answer == 'yes', 'isJobBoss')
+end)
+K.step('the boss menu should report me as a gang boss: {word}', 'client', function(ctx, answer)
+    assert(answer == 'yes' or answer == 'no', 'Use yes or no')
+    ctx:equal(bossCall('isGangBoss'), answer == 'yes', 'isGangBoss')
+end)
+K.step('the boss menu application for the job {string} should list its questions', 'client', function(ctx, job)
+    local form, err = bossCall('getApplication', job, 'job')
+    assert(type(form) == 'table', 'getApplication refused: ' .. tostring(err))
+    ctx:equal(form.roleType, 'job', 'Application role type')
+    assert(type(form.label) == 'string' and form.label ~= '', 'Application has no label')
+    ctx:equal(type(form.questions), 'table', 'Application questions')
+end)
+K.step('the boss menu application for {string} should be refused as an unknown organisation', 'client', function(ctx, job)
+    local form, err = bossCall('getApplication', job, 'job')
+    ctx:equal(form, nil, 'getApplication result')
+    ctx:equal(err, 'Unknown organization.', 'getApplication refusal')
+end)
+local BOSS_ONLY = {
+    acceptApplicant = function(job) return { jobName = job, citizenid = 'FFT00000' } end,
+    editQuestion = function(job) return { jobName = job, originalQuestion = 'fft', updatedQuestion = { question = 'fft', type = 'short' } } end,
+    removeQuestion = function(job) return { jobName = job, question = 'fft' } end,
+}
+K.step('the boss menu callback {string} for {string} should be refused as {string}', 'client', function(ctx, name, job, reason)
+    local build = assert(BOSS_ONLY[name], 'Not a boss-only callback in this suite: ' .. name)
+    local result, err = bossCall(name, build(job))
+    ctx:equal(result, false, name .. ' result')
+    ctx:equal(err, reason, name .. ' refusal')
+end)
+K.step('opening the boss stash should be refused as {string}', 'client', function(ctx, reason)
+    local result, err = bossCall('openStash', 'job')
+    ctx:equal(result, false, 'openStash result')
+    ctx:equal(err, reason, 'openStash refusal')
+end)
